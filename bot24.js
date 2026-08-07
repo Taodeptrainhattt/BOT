@@ -629,15 +629,19 @@ function khoitaobot(delay = 0) {
       const raw = jsonMsg.toString();
       log(raw);
 
-      if (ignoreChat) return;
-
       const clean = raw.replace(/§[0-9a-fklmnor]/gi, "").trim();
-      if (clean.includes("MINERUA NETWORK")) {
-        reconnect("Bị kick ra lobby");
+
+      // Check này luôn chạy, kể cả trong lúc ignoreChat (30s đầu sau spawn),
+      // vì "Câu lệnh không tồn tại" có thể xảy ra ngay trong lúc đang login/qua GUI.
+      if (clean.includes("Câu lệnh không tồn tại")) {
+        reconnect("Câu lệnh không tồn tại");
         return;
       }
-      if (clean.includes("Câu lệnh không tồn tại")) {
-        reconnect("Đang ở lobby");
+
+      if (ignoreChat) return;
+
+      if (clean.includes("MINERUA NETWORK")) {
+        reconnect("Bị kick ra lobby");
         return;
       }
       if (
@@ -686,5 +690,4 @@ function khoitaobot(delay = 0) {
     });
   }, delay);
 }
-
 khoitaobot();
