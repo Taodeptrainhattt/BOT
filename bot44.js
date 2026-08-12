@@ -130,7 +130,7 @@ function startBot(delay = 0) {
           guiBusy = true;
           try {
             await sleep(rand(1000, 1400));
-            await bot.clickWindow(14, 0, 0);
+            await bot.clickWindow(13, 0, 0);
             phase = 'skyUpdated';
             await sleep(1500);
             if (bot.currentWindow && phase === 'skyUpdated') {
