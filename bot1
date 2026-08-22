@@ -1,0 +1,510 @@
+const mineflayer = require('mineflayer');
+const readline   = require('readline');
+const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
+
+// CONFIG
+const HOST     = 'mc.minerua.com';
+const PORT     = 25565;
+const VERSION  = '1.21.4';
+const ACCOUNTS = ['ToiCoDonQua', 'KyoKy']; // thêm bao nhiêu tài khoản tùy ý
+const PASSWORD = 'nguyentrungtinh0102';   // mật khẩu dùng chung cho tất cả
+
+const WINDOW_OPEN_TIMEOUT_MS = 10000;
+const CHAT_COMMAND_GAP_MS    = 6000; // giãn cách giữa các lệnh chat để tránh spam-kick
+const TRADE_ALLOWED_SENDER   = '_BachPremium'; // chỉ tự động accept trade từ tài khoản này
+// Các ô trong cửa sổ trade dùng để bỏ đồ vào (trừ cần câu)
+const TRADE_OFFER_SLOTS = [9, 10, 11, 12, 18, 19, 20, 21, 27, 28, 29, 30, 36, 37, 38, 39, 44, 45, 46, 47, 48];
+
+const C = { green: '\x1b[32m', cyan: '\x1b[36m', yellow: '\x1b[33m', red: '\x1b[31m', reset: '\x1b[0m' };
+
+process.on('uncaughtException', err => { if (err.code !== 'EPIPE' && err.name !== 'PartialReadError') console.error('Lỗi:', err.message); });
+process.on('unhandledRejection', r => {});
+
+const sleep = ms => new Promise(res => setTimeout(res, ms));
+const rand  = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
+
+// ==== Helpers dùng cho phần Trade (lấy từ file 2) ====
+function getChatMessageText(msg) {
+  if (msg == null) return '';
+  if (typeof msg === 'string') return msg;
+  let text = msg.text || '';
+  if (Array.isArray(msg.extra)) {
+    for (const part of msg.extra) text += getChatMessageText(part);
+  }
+  return text;
+}
+
+function getScoreboardStats(bot) {
+  let money = "0";
+  for (let tName in bot.teamMap) {
+    if (tName.includes('§')) {
+      const team = bot.teamMap[tName];
+      const text = (getChatMessageText(team.prefix) + getChatMessageText(team.suffix)).replace(/\s+$/, '');
+      let matchMoney = text.match(/ᴍᴏɴᴇʏ:\s*([0-9\.]+[KkMmBbTt]*)/);
+      if (matchMoney) money = matchMoney[1];
+    }
+  }
+  return { money };
+}
+
+function norm(s) {
+  try { return String(s).normalize('NFC'); } catch (e) { return String(s); }
+}
+
+function itemMatchesText(item, targetText) {
+  if (!item) return false;
+  const target = norm(targetText);
+  try {
+    if (item.componentMap && item.componentMap.has('custom_name')) {
+      const raw = norm(JSON.stringify(item.componentMap.get('custom_name')));
+      if (raw.includes(target)) return true;
+    }
+    if (item.nbt) {
+      const raw = norm(JSON.stringify(item.nbt));
+      if (raw.includes(target)) return true;
+    }
+    const rawAll = norm(JSON.stringify(item));
+    if (rawAll.includes(target)) return true;
+  } catch (e) {}
+  return false;
+}
+
+function findSlotByDisplayName(window, targetName) {
+  if (!window || !window.slots) return null;
+  const guiEnd = window.inventoryStart ?? window.slots.length;
+  for (let slot = 0; slot < guiEnd; slot++) {
+    if (itemMatchesText(window.slots[slot], targetName)) return slot;
+  }
+  return null;
+}
+
+function buildTradeAmountText(moneyStr, buffer) {
+  const match = String(moneyStr).match(/^([\d.]+)\s*([KkMmBbTt]?)$/);
+  if (!match) return String(moneyStr);
+  let value = parseFloat(match[1]);
+  const unit = match[2] || '';
+  value = Math.max(0, value - buffer);
+  const text = value.toFixed(2).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+  return `${text}${unit}`;
+}
+// ==== Hết helpers Trade ====
+
+// Map username -> bot instance đang hoạt động
+const activeBots = {};
+
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+rl.on('line', l => {
+  const line = l.trim();
+  if (!line) return;
+
+  // Gõ "@ten_tai_khoan noi_dung" để chat bằng đúng 1 bot
+  const m = line.match(/^@(\S+)\s+([\s\S]+)$/);
+  if (m) {
+    const [, uname, msg] = m;
+    const b = activeBots[uname];
+    if (b) b.chat(msg);
+    else console.log(`Không tìm thấy bot đang online: ${uname}`);
+    return;
+  }
+
+  // Không có @ thì broadcast cho tất cả bot đang online
+  Object.values(activeBots).forEach(b => b.chat(line));
+});
+
+function startBot(username, delay = 0) {
+  setTimeout(() => {
+    console.log(`[${username}] Start Lite...`);
+
+    const bot = mineflayer.createBot({ host: HOST, port: PORT, username, version: VERSION, auth: 'offline', checkTimeoutInterval: 60000, keepAlive: true, hideErrors: true });
+    bot.loadPlugin(pathfinder);
+    activeBots[username] = bot;
+    bot.setMaxListeners(50);
+
+    let done = false, guiBusy = false, phase = 'init', ignoreChat = false;
+    let balInt = null;
+    let fishTimeout = null, fishing = false;
+    let visiting = false; // true khi đang /is visit kyoree, tạm dừng câu để rảnh tay trade
+    let following = false; // true khi đang bám theo _BachPremium
+
+    // --- state cho Trade ---
+    let tradeBusy = false;
+    let lastChatTime = 0;
+
+    const log = msg => console.log(`[${username}] ${msg}`);
+
+    function recon(rsn) {
+      if (done) return;
+      done = true;
+      if (balInt) clearInterval(balInt);
+      clearFishTimer();
+      fishing = false;
+      if (activeBots[username] === bot) delete activeBots[username];
+      log(`Recon: ${rsn}`);
+      try { bot.end(); } catch(_) {}
+      bot.removeAllListeners();
+      if (bot._client) bot._client.removeAllListeners();
+      startBot(username, 2000);
+    }
+
+    // ==== FISHING ====
+    async function equipRod() {
+      try {
+        const rod = bot.inventory.items().find(i => i.name === 'fishing_rod');
+        if (rod) await bot.equip(rod, 'hand');
+      } catch (_) {}
+    }
+
+    function clearFishTimer() {
+      if (fishTimeout) { clearTimeout(fishTimeout); fishTimeout = null; }
+    }
+
+    function armFishTimer() {
+      clearFishTimer();
+      fishTimeout = setTimeout(() => {
+        if (done) return;
+        log('Không thấy "Linh Khí" sau 5 phút, thả lại cần...');
+        recast('timeout');
+      }, 5 * 60 * 1000);
+    }
+
+    async function castRod() {
+      if (done || visiting || following) return;
+      try {
+        await equipRod();
+        bot.activateItem();
+        fishing = true;
+        log('Đã thả cần câu.');
+        armFishTimer();
+      } catch (e) {
+        log(`Lỗi thả cần: ${e.message}`);
+      }
+    }
+
+    async function recast(reason = '') {
+      if (done || visiting || following) return;
+      try {
+        if (fishing) {
+          bot.deactivateItem();
+          fishing = false;
+        }
+        await sleep(rand(600, 1000));
+        await castRod();
+      } catch (e) {}
+    }
+
+    // Dừng câu hẳn (không thả lại) để rảnh tay trade / visit
+    function stopFishing() {
+      clearFishTimer();
+      if (fishing) {
+        try { bot.deactivateItem(); } catch (e) {}
+        fishing = false;
+      }
+    }
+
+    // /warp afk1 + /taf triggerbot để vào khu vực đó, chờ 6s, rồi bám theo (follow liên tục)
+    // người chơi targetName cho tới khi nhận chat "here <targetName> dz".
+    async function warpAndFollowPlayer(targetName) {
+      if (done) return;
+      await safeChat('/warp afk1', `Phát hiện chat back ${targetName} dz, chạy: /warp afk1`);
+      await safeChat('/taf triggerbot', 'Chạy lệnh: /taolatraidep');
+      await sleep(6000);
+      if (done) return;
+
+      const player = bot.players[targetName];
+      if (!player || !player.entity) {
+        log(`Không thấy người chơi ${targetName} ở gần, không thể bám theo.`);
+        return;
+      }
+
+      try {
+        bot.physics.enabled = true;
+        const movements = new Movements(bot);
+        bot.pathfinder.setMovements(movements);
+        const goal = new goals.GoalFollow(player.entity, 2);
+        following = true;
+        bot.pathfinder.setGoal(goal, true); // dynamic=true -> liên tục bám theo khi mục tiêu di chuyển
+        log(`Đang bám theo ${targetName} liên tục, chờ lệnh "here ${targetName} dz" để dừng và thả cần.`);
+      } catch (e) {
+        log(`Lỗi khi bắt đầu bám theo ${targetName}: ${e.message}`);
+      }
+    }
+
+    // Dừng hẳn việc bám theo, đứng yên tại chỗ
+    function stopFollow() {
+      following = false;
+      try { bot.pathfinder.setGoal(null); } catch (e) {}
+      try { bot.pathfinder.stop(); } catch (e) {}
+      bot.physics.enabled = false;
+    }
+    // ==== END FISHING ====
+
+    // ==== TRADE (lấy từ file 2) ====
+    async function waitChatGap() {
+      const delayTime = CHAT_COMMAND_GAP_MS - (Date.now() - lastChatTime);
+      if (delayTime > 0) await sleep(delayTime);
+      lastChatTime = Date.now();
+    }
+
+    async function safeChat(cmd, logMsg = cmd) {
+      await waitChatGap();
+      log(logMsg);
+      bot.chat(cmd);
+    }
+
+    function waitForWindow(timeoutMs = WINDOW_OPEN_TIMEOUT_MS) {
+      return new Promise((resolve, reject) => {
+        const onOpen = (win) => {
+          clearTimeout(timeout);
+          resolve(win);
+        };
+        const timeout = setTimeout(() => {
+          bot.removeListener('windowOpen', onOpen);
+          reject(new Error('Timeout'));
+        }, timeoutMs);
+        bot.once('windowOpen', onOpen);
+      });
+    }
+
+    function waitForSignEditor(timeoutMs = 6000) {
+      return new Promise((resolve, reject) => {
+        const onOpen = (packet) => {
+          clearTimeout(timeout);
+          resolve(packet);
+        };
+        const timeout = setTimeout(() => {
+          bot._client.removeListener('open_sign_entity', onOpen);
+          reject(new Error('Timeout'));
+        }, timeoutMs);
+        bot._client.once('open_sign_entity', onOpen);
+      });
+    }
+
+    function submitSignText(signPacket, text) {
+      const line1 = String(text).slice(0, 30);
+      const updatePacket = { location: signPacket.location, text1: line1, text2: '', text3: '', text4: '' };
+      if (signPacket.isFrontText !== undefined) updatePacket.isFrontText = signPacket.isFrontText;
+      bot._client.write('update_sign', updatePacket);
+    }
+
+    // Bỏ hết đồ trong người (trừ cần câu) vào các ô offer của cửa sổ trade
+    async function depositItemsToTradeSlots(window, targetSlots) {
+      const invStart = window.inventoryStart ?? (window.slots.length - 36);
+      let slotIdx = 0;
+
+      for (let i = invStart; i < window.slots.length; i++) {
+        if (done) return;
+        if (slotIdx >= targetSlots.length) break;
+
+        const item = bot.currentWindow ? bot.currentWindow.slots[i] : null;
+        if (!item) continue;
+        if (item.name === 'fishing_rod') continue; // không bỏ cần câu vào
+
+        try {
+          await bot.clickWindow(i, 0, 0);
+          await sleep(rand(200, 400));
+          await bot.clickWindow(targetSlots[slotIdx], 0, 0);
+          await sleep(rand(200, 400));
+          slotIdx++;
+        } catch (e) {}
+      }
+    }
+
+    async function handleIncomingTrade(sender) {
+      if (done) return;
+
+      // Chỉ chấp nhận trade nếu người gửi đúng là TRADE_ALLOWED_SENDER
+      if (sender !== TRADE_ALLOWED_SENDER) {
+        await safeChat(`/trade deny ${sender}`, `Từ chối trade (không phải ${TRADE_ALLOWED_SENDER}): ${sender}`);
+        return;
+      }
+
+      if (tradeBusy) {
+        await safeChat(`/trade deny ${sender}`, `/trade deny ${sender}`);
+        return;
+      }
+
+      tradeBusy = true;
+      phase = 'trading';
+
+      try {
+        let windowPromise = waitForWindow(8000);
+        await safeChat(`/trade accept ${sender}`);
+        const tradeWindow = await windowPromise;
+        if (done) return;
+        await sleep(rand(600, 1000));
+
+        await depositItemsToTradeSlots(tradeWindow, TRADE_OFFER_SLOTS);
+        if (done) return;
+        await sleep(rand(400, 700));
+
+        const moneySlot = findSlotByDisplayName(tradeWindow, 'ᴛɪềɴ');
+        if (moneySlot == null) {
+          return;
+        }
+
+        const signPacketPromise = waitForSignEditor();
+        await bot.clickWindow(moneySlot, 0, 0);
+        const signPacket = await signPacketPromise;
+        if (done) return;
+
+        const stats = getScoreboardStats(bot);
+        const signText = buildTradeAmountText(stats.money, 0.1);
+        await sleep(rand(400, 700));
+        submitSignText(signPacket, signText);
+
+        await sleep(rand(1200, 1800));
+        if (done) return;
+
+        const confirmSlot = findSlotByDisplayName(bot.currentWindow, 'хáᴄ ɴʜậɴ ɢɪᴀᴏ ᴅịᴄʜ');
+        if (confirmSlot == null) {
+          return;
+        }
+
+        await bot.clickWindow(confirmSlot, 0, 0);
+        await sleep(8000);
+      } catch (err) {
+      } finally {
+        tradeBusy = false;
+        phase = 'joined';
+        if (bot.currentWindow) bot.closeWindow(bot.currentWindow);
+        // Không tự thả cần ở đây - chỉ thả khi nhận được chat "here _BachPremium dz"
+      }
+    }
+    // ==== END TRADE ====
+
+    async function joinSky() {
+      return new Promise(res => {
+        phase = 'skyMenu';
+        bot.chat('/sky');
+        const h = async w => {
+          if (phase !== 'skyMenu' || guiBusy) return;
+          guiBusy = true;
+          try {
+            await sleep(rand(1000, 1400));
+            await bot.clickWindow(13, 0, 0);
+            phase = 'skyUpdated';
+            await sleep(1500);
+            if (bot.currentWindow && phase === 'skyUpdated') {
+              await bot.clickWindow(19, 0, 0);
+              phase = 'joined';
+              await sleep(500);
+              if (bot.currentWindow) bot.closeWindow(bot.currentWindow);
+              res();
+            }
+          } catch (e) { res(); } finally { guiBusy = false; }
+        };
+        bot.once('windowOpen', h);
+        setTimeout(() => { bot.removeListener('windowOpen', h); res(); }, 15000);
+      });
+    }
+
+    bot.once('spawn', async () => {
+      balInt = setInterval(() => { if (!done) bot.chat('/bal'); }, 180000);
+      bot.physics.enabled = false;
+      ignoreChat = true;
+      setTimeout(() => { ignoreChat = false; }, 10000);
+
+      await sleep(2000);
+      if (done) return;
+      bot.chat(`/login ${PASSWORD}`);
+
+      await sleep(2000);
+      if (done) return;
+      await joinSky();
+      if (done) return;
+
+      await sleep(2000);
+      if (done) return;
+      await castRod();
+    });
+
+    bot.on('windowOpen', w => {
+      // Không tự đóng cửa sổ khi đang trong menu /sky hoặc đang xử lý trade
+      if (done || guiBusy || phase === 'skyMenu' || phase === 'skyUpdated' || phase === 'trading' || tradeBusy) return;
+      bot.closeWindow(w);
+    });
+
+    bot.on('message', async msg => {
+      if (done) return;
+      const clean = msg.toString().replace(/§[0-9a-fklmnor]/gi, '').trim();
+      if (!clean) return;
+
+      if (clean.includes('Câu lệnh không tồn tại')) {
+        recon('Lobby');
+        return;
+      }
+
+      // Ẩn log hiển thị máu (ActionBar)
+      if (clean.includes('❤')) return;
+
+      // Có người gửi yêu cầu trade -> tự động accept + ký bảng + xác nhận
+      const tradeReqMatch = clean.match(/AxTrade\s*»\s*You have received a trade request from\s+([A-Za-z0-9_]+)/i);
+      if (tradeReqMatch) {
+        const sender = tradeReqMatch[1];
+        handleIncomingTrade(sender);
+        return;
+      }
+
+      // Khi thấy chat "trade _BachPremium dz" -> dừng câu, đứng yên, rồi /is visit kyoree
+      const tradeMsgMatch = clean.match(/trade\s+_BachPremium\s+dz/i);
+      if (tradeMsgMatch) {
+        visiting = true;
+        stopFishing();
+        await safeChat('/is visit kyoree', `Phát hiện chat trade _BachPremium dz, dừng câu và chạy: /is visit kyoree`);
+        return;
+      }
+
+      // Khi thấy chat "back _BachPremium dz" -> /warp afk1, /taolatraidep, chờ 6s, rồi bám theo _BachPremium liên tục
+      const backMsgMatch = clean.match(/back\s+_BachPremium\s+dz/i);
+      if (backMsgMatch) {
+        warpAndFollowPlayer('_BachPremium');
+        return;
+      }
+
+      // Khi thấy chat "here _BachPremium dz" -> dừng bám theo, đứng yên tại chỗ, thả cần câu
+      const hereMsgMatch = clean.match(/here\s+_BachPremium\s+dz/i);
+      if (hereMsgMatch) {
+        if (!following) return;
+        stopFollow();
+        visiting = false;
+        await sleep(rand(500, 800));
+        await castRod();
+        return;
+      }
+
+      // Khi thấy chat "money _BachPremium dz" -> nhắn tin cho _BachPremium số tiền hiện có
+      const moneyMsgMatch = clean.match(/money\s+_BachPremium\s+dz/i);
+      if (moneyMsgMatch) {
+        const stats = getScoreboardStats(bot);
+        await safeChat(`/msg _BachPremium số tiền tôi đang có: ${stats.money}`, `Phát hiện chat money _BachPremium dz, báo tiền: ${stats.money}`);
+        return;
+      }
+
+      if (clean.includes('Linh Khí')) {
+        if (!ignoreChat) log(clean);
+        recast('linhkhi');
+        return;
+      }
+
+      if (ignoreChat) return;
+      log(clean);
+    });
+
+    bot.on('resourcePack', (u, h) => {
+      bot._client.write('resource_pack_receive', { uuid: h, result: 0 });
+      setTimeout(() => { if (!done) bot._client.write('resource_pack_receive', { uuid: h, result: 3 }); }, 3000);
+    });
+    bot._client.on('resource_pack_push', d => {
+      bot._client.write('resource_pack_receive', { uuid: d.uuid, result: 0 });
+      setTimeout(() => { if (!done) bot._client.write('resource_pack_receive', { uuid: d.uuid, result: 3 }); }, 3000);
+    });
+
+    bot.on('end', rsn => { if (!done) recon(rsn); });
+    bot.on('error', err => {
+      if (err.code !== 'EPIPE' && err.name !== 'PartialReadError') log(`Lỗi: ${err.message}`);
+    });
+
+  }, delay);
+}
+
+ACCOUNTS.forEach((username, i) => startBot(username, i * 3000));
