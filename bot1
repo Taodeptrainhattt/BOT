@@ -11,7 +11,7 @@ const PASSWORD = 'nguyentrungtinh0102';   // mật khẩu dùng chung cho tất 
 
 const WINDOW_OPEN_TIMEOUT_MS = 10000;
 const CHAT_COMMAND_GAP_MS    = 6000; // giãn cách giữa các lệnh chat để tránh spam-kick
-const TRADE_ALLOWED_SENDER   = '_BachPremium'; // chỉ tự động accept trade từ tài khoản này
+const TRADE_ALLOWED_SENDER   = 'NT_Gamingvn'; // chỉ tự động accept trade từ tài khoản này
 // Các ô trong cửa sổ trade dùng để bỏ đồ vào (trừ cần câu)
 const TRADE_OFFER_SLOTS = [9, 10, 11, 12, 18, 19, 20, 21, 27, 28, 29, 30, 36, 37, 38, 39, 44, 45, 46, 47, 48];
 
@@ -124,7 +124,7 @@ function startBot(username, delay = 0) {
     let balInt = null;
     let fishTimeout = null, fishing = false;
     let visiting = false; // true khi đang /is visit kyoree, tạm dừng câu để rảnh tay trade
-    let following = false; // true khi đang bám theo _BachPremium
+    let following = false; // true khi đang bám theo NT_Gamingvn
 
     // --- state cho Trade ---
     let tradeBusy = false;
@@ -367,7 +367,7 @@ function startBot(username, delay = 0) {
         tradeBusy = false;
         phase = 'joined';
         if (bot.currentWindow) bot.closeWindow(bot.currentWindow);
-        // Không tự thả cần ở đây - chỉ thả khi nhận được chat "here _BachPremium dz"
+        // Không tự thả cần ở đây - chỉ thả khi nhận được chat "here NT_Gamingvn dz"
       }
     }
     // ==== END TRADE ====
@@ -445,24 +445,24 @@ function startBot(username, delay = 0) {
         return;
       }
 
-      // Khi thấy chat "trade _BachPremium dz" -> dừng câu, đứng yên, rồi /is visit kyoree
-      const tradeMsgMatch = clean.match(/trade\s+_BachPremium\s+dz/i);
+      // Khi thấy chat "trade NT_Gamingvn dz" -> dừng câu, đứng yên, rồi /is visit kyoree
+      const tradeMsgMatch = clean.match(/trade\s+NT_Gamingvn\s+dz/i);
       if (tradeMsgMatch) {
         visiting = true;
         stopFishing();
-        await safeChat('/is visit kyoree', `Phát hiện chat trade _BachPremium dz, dừng câu và chạy: /is visit kyoree`);
+        await safeChat('/is visit kyoree', `Phát hiện chat trade NT_Gamingvn dz, dừng câu và chạy: /is visit kyoree`);
         return;
       }
 
-      // Khi thấy chat "back _BachPremium dz" -> /warp afk1, /taolatraidep, chờ 6s, rồi bám theo _BachPremium liên tục
-      const backMsgMatch = clean.match(/back\s+_BachPremium\s+dz/i);
+      // Khi thấy chat "back NT_Gamingvn dz" -> /warp afk1, /taolatraidep, chờ 6s, rồi bám theo NT_Gamingvn liên tục
+      const backMsgMatch = clean.match(/back\s+NT_Gamingvn\s+dz/i);
       if (backMsgMatch) {
-        warpAndFollowPlayer('_BachPremium');
+        warpAndFollowPlayer('NT_Gamingvn');
         return;
       }
 
-      // Khi thấy chat "here _BachPremium dz" -> dừng bám theo, đứng yên tại chỗ, thả cần câu
-      const hereMsgMatch = clean.match(/here\s+_BachPremium\s+dz/i);
+      // Khi thấy chat "here NT_Gamingvn dz" -> dừng bám theo, đứng yên tại chỗ, thả cần câu
+      const hereMsgMatch = clean.match(/here\s+NT_Gamingvn\s+dz/i);
       if (hereMsgMatch) {
         if (!following) return;
         stopFollow();
@@ -472,11 +472,11 @@ function startBot(username, delay = 0) {
         return;
       }
 
-      // Khi thấy chat "money _BachPremium dz" -> nhắn tin cho _BachPremium số tiền hiện có
-      const moneyMsgMatch = clean.match(/money\s+_BachPremium\s+dz/i);
+      // Khi thấy chat "money NT_Gamingvn dz" -> nhắn tin cho NT_Gamingvn số tiền hiện có
+      const moneyMsgMatch = clean.match(/money\s+NT_Gamingvn\s+dz/i);
       if (moneyMsgMatch) {
         const stats = getScoreboardStats(bot);
-        await safeChat(`/msg _BachPremium số tiền tôi đang có: ${stats.money}`, `Phát hiện chat money _BachPremium dz, báo tiền: ${stats.money}`);
+        await safeChat(`/msg NT_Gamingvn số tiền tôi đang có: ${stats.money}`, `Phát hiện chat money NT_Gamingvn dz, báo tiền: ${stats.money}`);
         return;
       }
 
