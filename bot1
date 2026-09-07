@@ -1,21 +1,116 @@
 const mineflayer = require('mineflayer');
 const readline   = require('readline');
+const https       = require('https');
+const { URL }      = require('url');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 
 // CONFIG
 const HOST     = 'mc.minerua.com';
 const PORT     = 25565;
 const VERSION  = '1.21.4';
-const ACCOUNTS = ['ToiCoDonQua', 'KyoKy']; // thêm bao nhiêu tài khoản tùy ý
+const ACCOUNTS = ['AnhYeuThuw', 'kassredmc', 'Kared2', 'Kared3', 'HAT_Gaming']; // thêm bao nhiêu tài khoản tùy ý
 const PASSWORD = 'nguyentrungtinh0102';   // mật khẩu dùng chung cho tất cả
 
 const WINDOW_OPEN_TIMEOUT_MS = 10000;
 const CHAT_COMMAND_GAP_MS    = 6000; // giãn cách giữa các lệnh chat để tránh spam-kick
-const TRADE_ALLOWED_SENDER   = 'NT_Gamingvn'; // chỉ tự động accept trade từ tài khoản này
+const TRADE_ALLOWED_SENDER   = '_BachPremium'; // chỉ tự động accept trade từ tài khoản này
 // Các ô trong cửa sổ trade dùng để bỏ đồ vào (trừ cần câu)
 const TRADE_OFFER_SLOTS = [9, 10, 11, 12, 18, 19, 20, 21, 27, 28, 29, 30, 36, 37, 38, 39, 44, 45, 46, 47, 48];
 
 const C = { green: '\x1b[32m', cyan: '\x1b[36m', yellow: '\x1b[33m', red: '\x1b[31m', reset: '\x1b[0m' };
+
+// ==== CONFIG DISCORD ====
+const DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1540786913093492852/clUnhU2H1PFJ8_tZI0D1CUq8z3lX5xUBn4wQLtSY8fqbT9yyKDXpllEaQZetnQB_a8Uk';
+// Tên "chịu trách nhiệm" gửi Discord (tránh gửi trùng khi có nhiều tài khoản online cùng lúc)
+const DISCORD_REPORTER_ACCOUNT = ACCOUNTS[0];
+
+// _Ci và _BachPremium -> tag ID này
+const DISCORD_ID_CI_BACH = '1307610508555321344';
+// NT_Gamingvn và KaredMc -> tag ID này
+const DISCORD_ID_NT_KARED = '1215602618684936212';
+
+// Bỏ qua các tin nhắn thông báo vào/ra server, ví dụ:
+// "_BachPremium đã bò vào máy chủ", "KaredMc đã ra khỏi máy chủ"
+const JOIN_LEAVE_REGEX = /đã\s+(bò\s+vào|vào|ra\s+khỏi)\s+máy\s+chủ/i;
+
+// Bỏ qua các tin nhắn lệnh điều khiển bot, ví dụ:
+// "trade _BachPremium dz", "money _BachPremium dz", "back _BachPremium dz", "here _BachPremium dz"
+const BOT_COMMAND_REGEX = /(trade|money|back|here)\s+_BachPremium\s+dz/i;
+
+// Bỏ qua thông báo tìm thấy Rương Bảo Vật, ví dụ:
+// "✦ BẢO VẬT! KaredMc đã tìm thấy Rương Bảo Vật 3★!"
+const TREASURE_CHEST_REGEX = /BẢO\s+VẬT!.*đã\s+tìm\s+thấy\s+Rương\s+Bảo\s+Vật\s*\d+\s*★!/i;
+
+// Bỏ qua thông báo Hypnos rời/tham gia, ví dụ: "Hypnos đã rời đi", "Hypnos đã tham gia"
+const HYPNOS_JOIN_LEAVE_REGEX = /Hypnos\s+đã\s+(rời\s+đi|tham\s+gia)/i;
+
+function sendDiscordWebhook(content) {
+  try {
+    const url = new URL(DISCORD_WEBHOOK_URL);
+    const payload = JSON.stringify({
+      content,
+      allowed_mentions: { parse: ['users'] }
+    });
+    const req = https.request({
+      hostname: url.hostname,
+      path: url.pathname + url.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      }
+    }, res => { res.on('data', () => {}); });
+    req.on('error', () => {});
+    req.write(payload);
+    req.end();
+  } catch (e) {}
+}
+
+// Kiểm tra tin nhắn có phải chính người chơi "name" đang nói không, dạng "... name : nội dung"
+// (server thường chèn rank/tag phía trước tên nên không neo ở đầu dòng)
+function isSpeaking(clean, name) {
+  const escaped = name.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+  return new RegExp(`${escaped}\\s*:`).test(clean);
+}
+
+// Trả về nội dung cần gửi lên Discord (đã kèm tag nếu có), hoặc null nếu không cần gửi
+//
+// Quy tắc: chia 5 tên thành 3 nhóm (_Ci/_BachPremium chung 1 người, NT_Gamingvn/KaredMc chung 1 người, Hypnos riêng).
+// Với mỗi nhóm: nếu tên trong nhóm xuất hiện trong tin nhắn NHƯNG chính là do người đó tự chat (dạng "Tên : ...")
+// thì nhóm đó không tính (không gửi, không tag) - trừ khi trong CÙNG tin nhắn còn có nhóm khác được nhắc tới
+// (không phải do chính người đó tự nói) thì tin nhắn vẫn được gửi, kèm tag cho nhóm được nhắc tới đó.
+function buildDiscordContent(clean) {
+  if (JOIN_LEAVE_REGEX.test(clean)) return null;
+  if (BOT_COMMAND_REGEX.test(clean)) return null;
+  if (TREASURE_CHEST_REGEX.test(clean)) return null;
+  if (HYPNOS_JOIN_LEAVE_REGEX.test(clean)) return null;
+
+  const GROUPS = [
+    { names: ['_Ci', '_BachPremium'], id: DISCORD_ID_CI_BACH },
+    { names: ['NT_Gamingvn', 'KaredMc'], id: DISCORD_ID_NT_KARED },
+    { names: ['Hypnos'], id: null }
+  ];
+
+  const mentionIds = new Set();
+  let matched = false;
+
+  for (const group of GROUPS) {
+    const hasKeyword = group.names.some(name => clean.includes(name));
+    if (!hasKeyword) continue;
+
+    const isSelfSpeaking = group.names.some(name => isSpeaking(clean, name));
+    if (isSelfSpeaking) continue; // chính người trong nhóm này đang tự nói -> bỏ qua nhóm này
+
+    matched = true;
+    if (group.id) mentionIds.add(group.id);
+  }
+
+  if (!matched) return null;
+
+  const mentionText = [...mentionIds].map(id => `<@${id}>`).join(' ');
+  return mentionText ? `${mentionText}\n${clean}` : clean;
+}
+// ==== END CONFIG DISCORD ====
 
 process.on('uncaughtException', err => { if (err.code !== 'EPIPE' && err.name !== 'PartialReadError') console.error('Lỗi:', err.message); });
 process.on('unhandledRejection', r => {});
@@ -120,11 +215,11 @@ function startBot(username, delay = 0) {
     activeBots[username] = bot;
     bot.setMaxListeners(50);
 
-    let done = false, guiBusy = false, phase = 'init', ignoreChat = false;
+    let done = false, guiBusy = false, phase = 'init';
     let balInt = null;
     let fishTimeout = null, fishing = false;
     let visiting = false; // true khi đang /is visit kyoree, tạm dừng câu để rảnh tay trade
-    let following = false; // true khi đang bám theo NT_Gamingvn
+    let following = false; // true khi đang bám theo _BachPremium
 
     // --- state cho Trade ---
     let tradeBusy = false;
@@ -367,7 +462,7 @@ function startBot(username, delay = 0) {
         tradeBusy = false;
         phase = 'joined';
         if (bot.currentWindow) bot.closeWindow(bot.currentWindow);
-        // Không tự thả cần ở đây - chỉ thả khi nhận được chat "here NT_Gamingvn dz"
+        // Không tự thả cần ở đây - chỉ thả khi nhận được chat "here _BachPremium dz"
       }
     }
     // ==== END TRADE ====
@@ -401,8 +496,6 @@ function startBot(username, delay = 0) {
     bot.once('spawn', async () => {
       balInt = setInterval(() => { if (!done) bot.chat('/bal'); }, 180000);
       bot.physics.enabled = false;
-      ignoreChat = true;
-      setTimeout(() => { ignoreChat = false; }, 10000);
 
       await sleep(2000);
       if (done) return;
@@ -412,6 +505,8 @@ function startBot(username, delay = 0) {
       if (done) return;
       await joinSky();
       if (done) return;
+
+      log('Đã vào server.');
 
       await sleep(2000);
       if (done) return;
@@ -429,13 +524,19 @@ function startBot(username, delay = 0) {
       const clean = msg.toString().replace(/§[0-9a-fklmnor]/gi, '').trim();
       if (!clean) return;
 
+      // Ẩn log hiển thị máu (ActionBar)
+      if (clean.includes('❤')) return;
+
+      // Gửi thông báo Discord (chỉ 1 tài khoản đảm nhiệm để tránh gửi trùng)
+      if (username === DISCORD_REPORTER_ACCOUNT) {
+        const discordContent = buildDiscordContent(clean);
+        if (discordContent) sendDiscordWebhook(discordContent);
+      }
+
       if (clean.includes('Câu lệnh không tồn tại')) {
         recon('Lobby');
         return;
       }
-
-      // Ẩn log hiển thị máu (ActionBar)
-      if (clean.includes('❤')) return;
 
       // Có người gửi yêu cầu trade -> tự động accept + ký bảng + xác nhận
       const tradeReqMatch = clean.match(/AxTrade\s*»\s*You have received a trade request from\s+([A-Za-z0-9_]+)/i);
@@ -445,24 +546,24 @@ function startBot(username, delay = 0) {
         return;
       }
 
-      // Khi thấy chat "trade NT_Gamingvn dz" -> dừng câu, đứng yên, rồi /is visit kyoree
-      const tradeMsgMatch = clean.match(/trade\s+NT_Gamingvn\s+dz/i);
+      // Khi thấy chat "trade _BachPremium dz" -> dừng câu, đứng yên, rồi /is visit kyoree
+      const tradeMsgMatch = clean.match(/trade\s+_BachPremium\s+dz/i);
       if (tradeMsgMatch) {
         visiting = true;
         stopFishing();
-        await safeChat('/is visit kyoree', `Phát hiện chat trade NT_Gamingvn dz, dừng câu và chạy: /is visit kyoree`);
+        await safeChat('/is visit kyoree', `Phát hiện chat trade _BachPremium dz, dừng câu và chạy: /is visit kyoree`);
         return;
       }
 
-      // Khi thấy chat "back NT_Gamingvn dz" -> /warp afk1, /taolatraidep, chờ 6s, rồi bám theo NT_Gamingvn liên tục
-      const backMsgMatch = clean.match(/back\s+NT_Gamingvn\s+dz/i);
+      // Khi thấy chat "back _BachPremium dz" -> /warp afk1, /taolatraidep, chờ 6s, rồi bám theo _BachPremium liên tục
+      const backMsgMatch = clean.match(/back\s+_BachPremium\s+dz/i);
       if (backMsgMatch) {
-        warpAndFollowPlayer('NT_Gamingvn');
+        warpAndFollowPlayer('_BachPremium');
         return;
       }
 
-      // Khi thấy chat "here NT_Gamingvn dz" -> dừng bám theo, đứng yên tại chỗ, thả cần câu
-      const hereMsgMatch = clean.match(/here\s+NT_Gamingvn\s+dz/i);
+      // Khi thấy chat "here _BachPremium dz" -> dừng bám theo, đứng yên tại chỗ, thả cần câu
+      const hereMsgMatch = clean.match(/here\s+_BachPremium\s+dz/i);
       if (hereMsgMatch) {
         if (!following) return;
         stopFollow();
@@ -472,22 +573,22 @@ function startBot(username, delay = 0) {
         return;
       }
 
-      // Khi thấy chat "money NT_Gamingvn dz" -> nhắn tin cho NT_Gamingvn số tiền hiện có
-      const moneyMsgMatch = clean.match(/money\s+NT_Gamingvn\s+dz/i);
+      // Khi thấy chat "money _BachPremium dz" -> nhắn tin cho _BachPremium số tiền hiện có
+      const moneyMsgMatch = clean.match(/money\s+_BachPremium\s+dz/i);
       if (moneyMsgMatch) {
         const stats = getScoreboardStats(bot);
-        await safeChat(`/msg NT_Gamingvn số tiền tôi đang có: ${stats.money}`, `Phát hiện chat money NT_Gamingvn dz, báo tiền: ${stats.money}`);
+        await safeChat(`/msg _BachPremium số tiền tôi đang có: ${stats.money}`, `Phát hiện chat money _BachPremium dz, báo tiền: ${stats.money}`);
         return;
       }
 
       if (clean.includes('Linh Khí')) {
-        if (!ignoreChat) log(clean);
+        log('Phát hiện "Linh Khí", thả lại cần câu.');
         recast('linhkhi');
         return;
       }
 
-      if (ignoreChat) return;
-      log(clean);
+      // Các tin nhắn/chat khác của server: vẫn được xử lý ngầm ở trên (Discord, trade, warp...)
+      // nhưng không in nội dung chat gốc ra console nữa, chỉ log trạng thái của bot.
     });
 
     bot.on('resourcePack', (u, h) => {
