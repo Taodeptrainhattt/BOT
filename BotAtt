@@ -16,6 +16,11 @@ const CMD_VO_DUNGEON = '/warp dungeon1';
 const BAN_KINH_TIM_QUAI = 20;
 const BAN_KINH_TIM_BOSS = 28;
 
+// 3 loại đèn ếch (froglight) dùng khi boss bar báo "Bảo vệ trái tim của hầm ngục"
+const TEN_DEN_ECH = ['ochre_froglight', 'verdant_froglight', 'pearlescent_froglight'];
+const BAN_KINH_TIM_DEN_ECH = 64;
+const KHOANG_CACH_DUNG_CANH_DEN_ECH = 1; // đứng cách đèn ếch xa nhất 1 block
+
 const C = { green: '\x1b[32m', cyan: '\x1b[36m', yellow: '\x1b[33m', red: '\x1b[31m', reset: '\x1b[0m' };
 
 process.on('uncaughtException', err => { if (err.code !== 'EPIPE' && err.name !== 'PartialReadError') console.error('Lỗi:', err.message); });
@@ -26,7 +31,15 @@ const rand  = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
 
 let activeBot = null;
 const rl = readline.createInterface({ input: process.stdin, terminal: false });
-rl.on('line', l => { if (l.trim() && activeBot) activeBot.chat(l.trim()); });
+rl.on('line', l => {
+  const line = l.trim();
+  if (!line || !activeBot) return;
+  if (line.startsWith('!')) {
+    activeBot.emit('lenh_local', line.slice(1).toLowerCase());
+    return;
+  }
+  activeBot.chat(line);
+});
 
 function startBot(delay = 0) {
   setTimeout(() => {
@@ -45,12 +58,64 @@ function startBot(delay = 0) {
     let coThongBaoThucTinh = false;     // đã thấy dòng "Hãy hoàn thành thức tỉnh..." chưa
     let dangXuLySuKienDungeon = false;  // chặn xử lý trùng khi 1 thông báo in ra nhiều dòng
 
+    // --- Trạng thái riêng cho pha "Bảo vệ trái tim của hầm ngục" (boss bar) ---
+    let dangBaoVeTraiTim = false;       // boss bar hiện tại có đang hiển thị dòng này không
+    let dangXuLyBaoVeTraiTim = false;   // đang trong luồng xử lý (chặn gọi trùng)
+    let viTriDenEchHienTai = null;
+
+    let nhayLienTucInt = null;
+
     const log = msg => console.log(`[${USERNAME}] ${msg}`);
+
+    // ============================================================
+    //  NHẢY LIÊN TỤC KHI DI CHUYỂN (áp dụng cho MỌI kiểu di chuyển:
+    //  pathfinder farm, đuổi quái, đi tìm quái, v.v. — không riêng
+    //  lúc chạy tới đánh). Cứ ~650ms kiểm tra 1 lần: nếu bot đang thực
+    //  sự di chuyển (có control forward, hoặc pathfinder đang có goal,
+    //  và vận tốc ngang > 0 thật sự chứ không phải đứng yên/bị kẹt)
+    //  thì nhích 1 nhịp nhảy. Chỉ cần gọi 1 lần lúc khởi động.
+    // ============================================================
+    function batDauNhayKhiDiChuyen() {
+      if (nhayLienTucInt) return;
+      nhayLienTucInt = setInterval(() => {
+        if (done || !bot.entity) return;
+        const coGoalPathfinder = !!(bot.pathfinder && bot.pathfinder.goal);
+        const dangDiChuyen = (bot.controlState && bot.controlState.forward) || coGoalPathfinder;
+        if (!dangDiChuyen) return;
+
+        const v = bot.entity.velocity;
+        const tocDoNgang = Math.sqrt(v.x * v.x + v.z * v.z);
+        if (tocDoNgang > 0.02) {
+          bot.setControlState('jump', true);
+          setTimeout(() => { if (!done) bot.setControlState('jump', false); }, 200);
+        }
+      }, 650);
+    }
+
+    // Lệnh debug local (gõ "!debug" hoặc "!speed" vào console, KHÔNG gửi
+    // lên chat server) để so sánh hiệu ứng/thuộc tính tốc độ giữa lúc
+    // chơi tay (có buff chạy nhanh) và lúc bot đang chạy, từ đó xác định
+    // buff tốc độ đến từ đâu (potion effect chuẩn, attribute, hay 1 cơ
+    // chế custom khác như dash/skill cần trigger riêng).
+    function inDebugToDo() {
+      try {
+        const v = bot.entity ? bot.entity.velocity : null;
+        const tocDo = v ? Math.sqrt(v.x * v.x + v.z * v.z).toFixed(4) : 'n/a';
+        log(`[DEBUG SPEED] velocity_ngang=${tocDo} | effects=${JSON.stringify(bot.entity && bot.entity.effects)} | ` +
+            `attributes=${JSON.stringify(bot.entity && bot.entity.attributes)} | ` +
+            `controlState.sprint=${bot.controlState && bot.controlState.sprint} | ` +
+            `controlState.forward=${bot.controlState && bot.controlState.forward}`);
+      } catch (e) { log('Lỗi debug: ' + e.message); }
+    }
+    bot.on('lenh_local', lenh => {
+      if (lenh === 'debug' || lenh === 'speed') inDebugToDo();
+    });
 
     function recon(rsn) {
       if (done) return;
       done = true;
       if (balInt) clearInterval(balInt);
+      if (nhayLienTucInt) clearInterval(nhayLienTucInt);
       activeBot = null;
       log(`Recon: ${rsn}`);
       try { bot.end(); } catch(_) {}
@@ -107,6 +172,11 @@ function startBot(delay = 0) {
         bot.pathfinder.setMovements(movements);
       } catch (e) {}
 
+      // Bật sprint 1 lần, giữ nguyên suốt phiên (bật/tắt liên tục mỗi lần
+      // đổi hàm di chuyển trước đây gây khựng, giảm tốc trung bình).
+      bot.setControlState('sprint', true);
+      batDauNhayKhiDiChuyen();
+
       await voDungeon();       // vô dungeon lần đầu (/warp dungeon1)
       bot.chat('/taf triggerbot');
       await sleep(rand(1500, 2000));
@@ -157,6 +227,8 @@ function startBot(delay = 0) {
 
     // Chọn bừa 1 hướng, đi tối đa `thoiGian` ms, vừa đi vừa quét quái
     // quanh mình. Thấy quái là dừng đi lung tung và chạy tới đánh luôn.
+    // (Việc nhảy trong lúc chạy do bộ đếm toàn cục batDauNhayKhiDiChuyen lo,
+    // áp dụng cho MỌI kiểu di chuyển chứ không riêng hàm này.)
     async function diChuyenNgauNhienVaTimQuai(thoiGian) {
       if (!bot.entity) return false;
 
@@ -165,28 +237,17 @@ function startBot(delay = 0) {
 
       try { bot.lookAt(diemNhin, true); } catch (e) {}
       bot.setControlState('forward', true);
-      bot.setControlState('sprint', true); // chạy thay vì đi bộ
 
       const ketThuc = Date.now() + thoiGian;
       let quaiTimThay = null;
-      let demNhay = 0;
 
       while (Date.now() < ketThuc && !done) {
         await sleep(300);
-
-        // vừa chạy vừa nhảy định kỳ để vượt vật cản thấp / không bị kẹt
-        demNhay++;
-        if (demNhay % 2 === 0) {
-          bot.setControlState('jump', true);
-          setTimeout(() => bot.setControlState('jump', false), 200);
-        }
-
         quaiTimThay = timQuaiGanNhat(BAN_KINH_TIM_QUAI);
         if (quaiTimThay) break;
       }
 
       bot.setControlState('forward', false);
-      bot.setControlState('sprint', false);
 
       if (quaiTimThay) {
         await diChuyenToiVaDanhQuai(quaiTimThay);
@@ -235,29 +296,32 @@ function startBot(delay = 0) {
       }
     }
 
-    // Đánh 1 phát và chờ xem entity có phát animation "bị trúng đòn"
-    // (sự kiện entityHurt) trong khoảng ngắn hay không. Quái còn sống
-    // bình thường sẽ phát animation này mỗi lần trúng; nếu không còn
-    // phản ứng gì sau nhiều nhát liên tiếp, coi như nó đã chết/vô hiệu
-    // (dù entity vẫn còn tồn tại) để khỏi đánh phí thời gian.
-    function danhVaChoPhanUng(quai, thoiGianCho = 350) {
-      return new Promise(resolve => {
-        let xong = false;
-        const h = e => {
-          if (xong || !e || e.id !== quai.id) return;
-          xong = true;
-          bot.removeListener('entityHurt', h);
-          resolve(true);
-        };
-        bot.on('entityHurt', h);
-        bot.attack(quai);
-        setTimeout(() => {
-          if (xong) return;
-          xong = true;
-          bot.removeListener('entityHurt', h);
-          resolve(false);
-        }, thoiGianCho);
-      });
+    // Cố đọc HP hiện tại/tối đa nếu tên quái hiển thị dạng "... 12/50 ..."
+    // hoặc "...[12/50]..." (phổ biến ở server RPG custom mob).
+    function layMauQuaTen(e) {
+      const ten = getTenTuyChinh(e);
+      if (!ten) return null;
+      const m = ten.match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/);
+      if (!m) return null;
+      return { hienTai: parseFloat(m[1]), toiDa: parseFloat(m[2]) };
+    }
+
+    // Check "còn sống" thật sự, theo thứ tự ưu tiên:
+    // 1) Entity đã biến mất khỏi world -> chắc chắn chết.
+    // 2) Máu đọc được từ tên (kiểu server RPG hiện HP trong nametag) -> dùng cái này làm chuẩn.
+    // 3) Field health chuẩn của LivingEntity (mineflayer tự parse từ metadata) nếu có.
+    // 4) Không có tín hiệu nào -> coi như còn sống (chỉ dừng khi entity biến mất hoặc hết giờ an toàn).
+    // LƯU Ý: cách (2) phụ thuộc format tên thật của server bạn; nếu không đúng dạng
+    // "hiện/tối đa", gửi mình 1 ví dụ tên quái lúc đang bị đánh để chỉnh lại regex.
+    function quaiConSong(e) {
+      if (!e || !bot.entities[e.id]) return false;
+
+      const mau = layMauQuaTen(e);
+      if (mau) return mau.hienTai > 0;
+
+      if (typeof e.health === 'number') return e.health > 0;
+
+      return true;
     }
 
     async function diChuyenToiVaDanhQuai(quai, kiemTraHuyGiuaChung) {
@@ -265,45 +329,137 @@ function startBot(delay = 0) {
       try { bot.pathfinder.setGoal(new goals.GoalFollow(quai, 2), true); } catch (e) {}
 
       const batDau = Date.now();
-      let demNhay = 0;
-      let soLanKhongTrung = 0;
-      const GIOI_HAN_KHONG_TRUNG = 3; // số nhát liên tiếp không có phản ứng thì coi như quái đã chết/vô hiệu
-
-      bot.setControlState('sprint', true); // luôn chạy khi tiếp cận / đang giao tranh
 
       while (!done && bot.entities[quai.id]) {
         if (kiemTraHuyGiuaChung && kiemTraHuyGiuaChung()) break;
 
-        // vừa di chuyển vừa nhảy định kỳ (tránh kẹt vật cản khi đuổi theo quái)
-        demNhay++;
-        if (demNhay % 3 === 0) {
-          bot.setControlState('jump', true);
-          setTimeout(() => bot.setControlState('jump', false), 200);
+        if (!quaiConSong(quai)) {
+          log(`Quái đã hết máu (${getTenTuyChinh(quai) || quai.name || quai.type}) -> dừng đánh, tìm mục tiêu khác.`);
+          break;
         }
 
         const khoangCach = bot.entity.position.distanceTo(quai.position);
         if (khoangCach <= 3.5) {
           try { bot.lookAt(quai.position.offset(0, 1.2, 0), true); } catch (e) {}
-
-          const trung = await danhVaChoPhanUng(quai);
-          if (trung) {
-            soLanKhongTrung = 0;
-          } else {
-            soLanKhongTrung++;
-            if (soLanKhongTrung >= GIOI_HAN_KHONG_TRUNG) {
-              log('Quái không còn phản ứng khi đánh (có thể đã chết) -> bỏ qua, tìm mục tiêu khác.');
-              break;
-            }
-          }
+          bot.attack(quai);
+          await sleep(450); // ~tốc độ đánh 1 vũ khí thường, chỉnh lại nếu vũ khí đánh nhanh/chậm hơn
         } else {
           await sleep(400);
         }
 
-        if (Date.now() - batDau > 20000) break;
+        if (Date.now() - batDau > 20000) break; // an toàn, tránh kẹt vô hạn với 1 con quái
       }
 
-      bot.setControlState('sprint', false);
       try { bot.pathfinder.setGoal(null); } catch (e) {}
+    }
+
+    // ============================================================
+    //  BOSS BAR: "Bảo vệ trái tim của hầm ngục"
+    //  - Khi boss bar hiện dòng này: tạm dừng farm, tìm 1 trong 3
+    //    loại đèn ếch (froglight) gần nhất, di chuyển tới đứng cách
+    //    nó xa nhất 1 block và đứng yên tại đó.
+    //  - Khi boss bar đổi nội dung/biến mất: quay lại farm bình thường.
+    //  GIẢ ĐỊNH: server gửi dòng này qua boss bar thật (packet
+    //  boss_bar) nên dùng sự kiện bossBarCreated/Updated của
+    //  mineflayer. Nếu bot không bắt được, log bossBar thô ra để
+    //  kiểm tra cấu trúc thật rồi chỉnh lại laBossBarBaoVeTraiTim().
+    // ============================================================
+
+    function laBossBarBaoVeTraiTim(bossBar) {
+      try {
+        let text = '';
+        if (bossBar && bossBar.title) {
+          text = typeof bossBar.title.toString === 'function'
+            ? bossBar.title.toString()
+            : chatComponentToText(bossBar.title);
+        }
+        return text.toLowerCase().includes('bảo vệ trái tim của hầm ngục');
+      } catch (e) { return false; }
+    }
+
+    // Tìm 1 trong 3 loại đèn ếch gần nhất và ra lệnh pathfinder di
+    // chuyển tới đứng cách nó xa nhất KHOANG_CACH_DUNG_CANH_DEN_ECH block.
+    async function diToiDenEchGanNhat() {
+      if (!bot.entity) return null;
+
+      let mcData;
+      try { mcData = require('minecraft-data')(bot.version); } catch (e) {
+        log('Không load được minecraft-data để tra id đèn ếch.');
+        return null;
+      }
+
+      const idsCanTim = TEN_DEN_ECH
+        .map(ten => mcData.blocksByName[ten] && mcData.blocksByName[ten].id)
+        .filter(id => id !== undefined);
+
+      if (!idsCanTim.length) {
+        log('Không nhận diện được block id của đèn ếch (kiểm tra lại tên block).');
+        return null;
+      }
+
+      const khoi = bot.findBlock({
+        matching: b => idsCanTim.includes(b.type),
+        maxDistance: BAN_KINH_TIM_DEN_ECH
+      });
+
+      if (!khoi) {
+        log('Không tìm thấy đèn ếch nào trong bán kính gần.');
+        return null;
+      }
+
+      log(`Tìm thấy đèn ếch tại (${khoi.position.x}, ${khoi.position.y}, ${khoi.position.z}) -> di chuyển tới đứng cạnh (≤${KHOANG_CACH_DUNG_CANH_DEN_ECH} block).`);
+      try {
+        bot.pathfinder.setGoal(new goals.GoalNear(
+          khoi.position.x, khoi.position.y, khoi.position.z,
+          KHOANG_CACH_DUNG_CANH_DEN_ECH
+        ));
+      } catch (e) {}
+
+      return khoi.position;
+    }
+
+    // Luồng xử lý chính: tạm dừng farm, đứng cạnh đèn ếch cho tới khi
+    // boss bar không còn hiện dòng "Bảo vệ trái tim..." nữa.
+    async function xuLyBaoVeTraiTim() {
+      if (dangXuLyBaoVeTraiTim) return;
+      dangXuLyBaoVeTraiTim = true;
+      log('Boss bar: "Bảo vệ trái tim của hầm ngục" -> tạm dừng farm, tìm đèn ếch để đứng cạnh.');
+
+      const dangFarmTruocDo = farmActive;
+      farmActive = false;
+      try { bot.pathfinder.setGoal(null); } catch (e) {}
+
+      viTriDenEchHienTai = await diToiDenEchGanNhat();
+
+      while (!done && dangBaoVeTraiTim) {
+        if (viTriDenEchHienTai) {
+          const kc = bot.entity.position.distanceTo(viTriDenEchHienTai);
+          if (kc > KHOANG_CACH_DUNG_CANH_DEN_ECH + 2) {
+            // lỡ bị đẩy ra xa (bị đánh văng, quái đẩy...) -> đi lại
+            viTriDenEchHienTai = await diToiDenEchGanNhat();
+          }
+        } else {
+          viTriDenEchHienTai = await diToiDenEchGanNhat();
+        }
+        await sleep(1000);
+      }
+
+      try { bot.pathfinder.setGoal(null); } catch (e) {}
+      viTriDenEchHienTai = null;
+      log('Hết pha "Bảo vệ trái tim của hầm ngục" -> quay lại farm.');
+      dangXuLyBaoVeTraiTim = false;
+      if (dangFarmTruocDo) batDauFarm();
+    }
+
+    function xuLyBossBarThayDoi(bossBar) {
+      if (done) return;
+      const canBaoVe = laBossBarBaoVeTraiTim(bossBar);
+      if (canBaoVe && !dangBaoVeTraiTim) {
+        dangBaoVeTraiTim = true;
+        xuLyBaoVeTraiTim();
+      } else if (!canBaoVe && dangBaoVeTraiTim) {
+        dangBaoVeTraiTim = false; // vòng while trong xuLyBaoVeTraiTim sẽ tự thoát ở lượt kiểm tra kế tiếp
+      }
     }
 
     const LOAI_KHONG_PHAI_QUAI = new Set([
@@ -479,6 +635,10 @@ function startBot(delay = 0) {
       if (done) return;
       await khoiDong();
     });
+
+    bot.on('bossBarCreated', xuLyBossBarThayDoi);
+    bot.on('bossBarUpdated', xuLyBossBarThayDoi);
+    bot.on('bossBarDeleted', () => { dangBaoVeTraiTim = false; });
 
     bot.on('windowOpen', w => {
       if (done || guiBusy || phase === 'skyMenu' || phase === 'skyUpdated') return;
