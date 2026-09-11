@@ -6,13 +6,12 @@ const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const HOST     = 'mc.minerua.com';
 const PORT     = 25565;
 const VERSION  = '1.21.4';
-const USERNAME = '_BachPremium'; 
-const PASSWORD = 'TaoLaTraiDep';
+const USERNAME = '_Ci'; 
+const PASSWORD = 'nguyentrungtinh0102';
 
-// Lệnh vô / vô lại dungeon - chỉnh 1 chỗ này là áp dụng cho mọi nơi
 const CMD_VO_DUNGEON = '/warp dungeon1';
 
-// Bán kính (khối) quét quái / BOSS - tăng lên nếu phòng dungeon rộng
+// Bán kính (khối) quét quái / BOSS
 const BAN_KINH_TIM_QUAI = 20;
 const BAN_KINH_TIM_BOSS = 28;
 
@@ -87,15 +86,27 @@ function startBot(delay = 0) {
     // ============================================================
     //  DEBUG TỐC ĐỘ: đo khoảng cách di chuyển thật (theo mặt phẳng
     //  ngang, dựa trên bot.entity.position, KHÔNG suy ra từ velocity)
-    //  mỗi giây, in ra block/s thật đang chạy để biết chính xác đang
-    //  chậm cỡ nào so với tốc độ mong đợi. In kèm trạng thái sprint và
-    //  vật đang cầm tay (để kiểm tra nghi vấn: skill bắn cung có thể
-    //  chỉ tự cộng tốc độ chạy khi người chơi đang CẦM CUNG trên tay,
-    //  nếu bot không cầm cung thì server sẽ không cộng buff này).
+    //  mỗi giây, in ra block/s thật đang chạy. In kèm attribute
+    //  "movement_speed" (nếu server có gửi qua attribute chuẩn) và
+    //  danh sách hiệu ứng (potion effect) đang có, để xác định buff
+    //  tốc độ của server đến từ đâu:
+    //  - Nếu attribute/effect CÓ tăng lên nhưng block/s vẫn thấp ->
+    //    lỗi nằm ở việc mineflayer không áp dụng đúng giá trị đó vào
+    //    mô phỏng vật lý cục bộ -> cần tự cộng thêm tốc độ thủ công.
+    //  - Nếu attribute/effect KHÔNG hề đổi dù ngoài đời đang chạy
+    //    nhanh -> buff không đến qua attribute/effect chuẩn (có thể
+    //    qua gói tin khác, vd player_abilities chỉnh thẳng walk
+    //    speed) -> cần xử lý theo hướng khác.
     // ============================================================
     const CHU_KY_DEBUG_TOC_DO = 1000; // ms
     let debugTocDoInt = null;
     let viTriTruocDoDebug = null;
+
+    function layAttributeTocDo() {
+      const attrs = (bot.entity && bot.entity.attributes) || {};
+      const key = Object.keys(attrs).find(k => k.toLowerCase().includes('movement_speed') || k.toLowerCase().includes('movementspeed'));
+      return key ? attrs[key] : null;
+    }
 
     function batDauDebugTocDo() {
       if (debugTocDoInt) return;
@@ -108,8 +119,10 @@ function startBot(delay = 0) {
           const dz = viTriHienTai.z - viTriTruocDoDebug.z;
           const quangDuong = Math.sqrt(dx * dx + dz * dz);
           const tocDo = quangDuong / (CHU_KY_DEBUG_TOC_DO / 1000);
-          const vatCamTay = bot.heldItem ? bot.heldItem.name : 'trống';
-          log(`[TỐC ĐỘ] ${tocDo.toFixed(2)} block/s | sprint=${!!(bot.controlState && bot.controlState.sprint)} | vật cầm tay=${vatCamTay}`);
+          const attrTocDo = layAttributeTocDo();
+          const hieuUng = bot.entity.effects || {};
+          log(`[TỐC ĐỘ] ${tocDo.toFixed(2)} block/s | sprint=${!!(bot.controlState && bot.controlState.sprint)} | ` +
+              `attribute_toc_do=${attrTocDo ? JSON.stringify(attrTocDo) : 'không có'} | hieu_ung=${JSON.stringify(hieuUng)}`);
         }
         viTriTruocDoDebug = viTriHienTai.clone();
       }, CHU_KY_DEBUG_TOC_DO);
@@ -184,7 +197,7 @@ function startBot(delay = 0) {
       batDauDebugTocDo();
 
       await voDungeon();       // vô dungeon lần đầu (/warp dungeon1)
-      bot.chat('/taf triggerbotriggerbotriggerbotriggerbot');
+      bot.chat('/taf t');
       await sleep(rand(1500, 2000));
       coThongBaoThucTinh = false; // reset 1 lần khi mới vô, không reset mỗi vòng lặp
 
