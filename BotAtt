@@ -31,15 +31,7 @@ const rand  = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
 
 let activeBot = null;
 const rl = readline.createInterface({ input: process.stdin, terminal: false });
-rl.on('line', l => {
-  const line = l.trim();
-  if (!line || !activeBot) return;
-  if (line.startsWith('!')) {
-    activeBot.emit('lenh_local', line.slice(1).toLowerCase());
-    return;
-  }
-  activeBot.chat(line);
-});
+rl.on('line', l => { if (l.trim() && activeBot) activeBot.chat(l.trim()); });
 
 function startBot(delay = 0) {
   setTimeout(() => {
@@ -92,30 +84,43 @@ function startBot(delay = 0) {
       }, 650);
     }
 
-    // Lệnh debug local (gõ "!debug" hoặc "!speed" vào console, KHÔNG gửi
-    // lên chat server) để so sánh hiệu ứng/thuộc tính tốc độ giữa lúc
-    // chơi tay (có buff chạy nhanh) và lúc bot đang chạy, từ đó xác định
-    // buff tốc độ đến từ đâu (potion effect chuẩn, attribute, hay 1 cơ
-    // chế custom khác như dash/skill cần trigger riêng).
-    function inDebugToDo() {
-      try {
-        const v = bot.entity ? bot.entity.velocity : null;
-        const tocDo = v ? Math.sqrt(v.x * v.x + v.z * v.z).toFixed(4) : 'n/a';
-        log(`[DEBUG SPEED] velocity_ngang=${tocDo} | effects=${JSON.stringify(bot.entity && bot.entity.effects)} | ` +
-            `attributes=${JSON.stringify(bot.entity && bot.entity.attributes)} | ` +
-            `controlState.sprint=${bot.controlState && bot.controlState.sprint} | ` +
-            `controlState.forward=${bot.controlState && bot.controlState.forward}`);
-      } catch (e) { log('Lỗi debug: ' + e.message); }
+    // ============================================================
+    //  DEBUG TỐC ĐỘ: đo khoảng cách di chuyển thật (theo mặt phẳng
+    //  ngang, dựa trên bot.entity.position, KHÔNG suy ra từ velocity)
+    //  mỗi giây, in ra block/s thật đang chạy để biết chính xác đang
+    //  chậm cỡ nào so với tốc độ mong đợi. In kèm trạng thái sprint và
+    //  vật đang cầm tay (để kiểm tra nghi vấn: skill bắn cung có thể
+    //  chỉ tự cộng tốc độ chạy khi người chơi đang CẦM CUNG trên tay,
+    //  nếu bot không cầm cung thì server sẽ không cộng buff này).
+    // ============================================================
+    const CHU_KY_DEBUG_TOC_DO = 1000; // ms
+    let debugTocDoInt = null;
+    let viTriTruocDoDebug = null;
+
+    function batDauDebugTocDo() {
+      if (debugTocDoInt) return;
+      viTriTruocDoDebug = bot.entity ? bot.entity.position.clone() : null;
+      debugTocDoInt = setInterval(() => {
+        if (done || !bot.entity) return;
+        const viTriHienTai = bot.entity.position;
+        if (viTriTruocDoDebug) {
+          const dx = viTriHienTai.x - viTriTruocDoDebug.x;
+          const dz = viTriHienTai.z - viTriTruocDoDebug.z;
+          const quangDuong = Math.sqrt(dx * dx + dz * dz);
+          const tocDo = quangDuong / (CHU_KY_DEBUG_TOC_DO / 1000);
+          const vatCamTay = bot.heldItem ? bot.heldItem.name : 'trống';
+          log(`[TỐC ĐỘ] ${tocDo.toFixed(2)} block/s | sprint=${!!(bot.controlState && bot.controlState.sprint)} | vật cầm tay=${vatCamTay}`);
+        }
+        viTriTruocDoDebug = viTriHienTai.clone();
+      }, CHU_KY_DEBUG_TOC_DO);
     }
-    bot.on('lenh_local', lenh => {
-      if (lenh === 'debug' || lenh === 'speed') inDebugToDo();
-    });
 
     function recon(rsn) {
       if (done) return;
       done = true;
       if (balInt) clearInterval(balInt);
       if (nhayLienTucInt) clearInterval(nhayLienTucInt);
+      if (debugTocDoInt) clearInterval(debugTocDoInt);
       activeBot = null;
       log(`Recon: ${rsn}`);
       try { bot.end(); } catch(_) {}
@@ -176,9 +181,10 @@ function startBot(delay = 0) {
       // đổi hàm di chuyển trước đây gây khựng, giảm tốc trung bình).
       bot.setControlState('sprint', true);
       batDauNhayKhiDiChuyen();
+      batDauDebugTocDo();
 
       await voDungeon();       // vô dungeon lần đầu (/warp dungeon1)
-      bot.chat('/taf triggerbot');
+      bot.chat('/taf triggerbotriggerbotriggerbotriggerbot');
       await sleep(rand(1500, 2000));
       coThongBaoThucTinh = false; // reset 1 lần khi mới vô, không reset mỗi vòng lặp
 
