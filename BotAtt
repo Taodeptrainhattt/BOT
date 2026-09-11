@@ -100,7 +100,12 @@ function startBot(delay = 0) {
       log('=== KHỞI ĐỘNG ===');
 
       bot.physics.enabled = true;
-      try { bot.pathfinder.setMovements(new Movements(bot)); } catch (e) {}
+      try {
+        const movements = new Movements(bot);
+        movements.allowSprinting = true; // chạy (sprint) thay vì đi bộ thường -> đúng tốc độ tối đa
+        movements.allowParkour = true;   // cho phép nhảy qua vật cản/hố nhỏ khi di chuyển
+        bot.pathfinder.setMovements(movements);
+      } catch (e) {}
 
       await voDungeon();       // vô dungeon lần đầu (/warp dungeon1)
       bot.chat('/taf triggerbot');
@@ -160,17 +165,28 @@ function startBot(delay = 0) {
 
       try { bot.lookAt(diemNhin, true); } catch (e) {}
       bot.setControlState('forward', true);
+      bot.setControlState('sprint', true); // chạy thay vì đi bộ
 
       const ketThuc = Date.now() + thoiGian;
       let quaiTimThay = null;
+      let demNhay = 0;
 
       while (Date.now() < ketThuc && !done) {
         await sleep(300);
+
+        // vừa chạy vừa nhảy định kỳ để vượt vật cản thấp / không bị kẹt
+        demNhay++;
+        if (demNhay % 2 === 0) {
+          bot.setControlState('jump', true);
+          setTimeout(() => bot.setControlState('jump', false), 200);
+        }
+
         quaiTimThay = timQuaiGanNhat(BAN_KINH_TIM_QUAI);
         if (quaiTimThay) break;
       }
 
       bot.setControlState('forward', false);
+      bot.setControlState('sprint', false);
 
       if (quaiTimThay) {
         await diChuyenToiVaDanhQuai(quaiTimThay);
@@ -219,25 +235,74 @@ function startBot(delay = 0) {
       }
     }
 
+    // Đánh 1 phát và chờ xem entity có phát animation "bị trúng đòn"
+    // (sự kiện entityHurt) trong khoảng ngắn hay không. Quái còn sống
+    // bình thường sẽ phát animation này mỗi lần trúng; nếu không còn
+    // phản ứng gì sau nhiều nhát liên tiếp, coi như nó đã chết/vô hiệu
+    // (dù entity vẫn còn tồn tại) để khỏi đánh phí thời gian.
+    function danhVaChoPhanUng(quai, thoiGianCho = 350) {
+      return new Promise(resolve => {
+        let xong = false;
+        const h = e => {
+          if (xong || !e || e.id !== quai.id) return;
+          xong = true;
+          bot.removeListener('entityHurt', h);
+          resolve(true);
+        };
+        bot.on('entityHurt', h);
+        bot.attack(quai);
+        setTimeout(() => {
+          if (xong) return;
+          xong = true;
+          bot.removeListener('entityHurt', h);
+          resolve(false);
+        }, thoiGianCho);
+      });
+    }
+
     async function diChuyenToiVaDanhQuai(quai, kiemTraHuyGiuaChung) {
       if (!quai) return;
       try { bot.pathfinder.setGoal(new goals.GoalFollow(quai, 2), true); } catch (e) {}
 
       const batDau = Date.now();
+      let demNhay = 0;
+      let soLanKhongTrung = 0;
+      const GIOI_HAN_KHONG_TRUNG = 3; // số nhát liên tiếp không có phản ứng thì coi như quái đã chết/vô hiệu
+
+      bot.setControlState('sprint', true); // luôn chạy khi tiếp cận / đang giao tranh
+
       while (!done && bot.entities[quai.id]) {
         if (kiemTraHuyGiuaChung && kiemTraHuyGiuaChung()) break;
+
+        // vừa di chuyển vừa nhảy định kỳ (tránh kẹt vật cản khi đuổi theo quái)
+        demNhay++;
+        if (demNhay % 3 === 0) {
+          bot.setControlState('jump', true);
+          setTimeout(() => bot.setControlState('jump', false), 200);
+        }
 
         const khoangCach = bot.entity.position.distanceTo(quai.position);
         if (khoangCach <= 3.5) {
           try { bot.lookAt(quai.position.offset(0, 1.2, 0), true); } catch (e) {}
-          bot.attack(quai);
+
+          const trung = await danhVaChoPhanUng(quai);
+          if (trung) {
+            soLanKhongTrung = 0;
+          } else {
+            soLanKhongTrung++;
+            if (soLanKhongTrung >= GIOI_HAN_KHONG_TRUNG) {
+              log('Quái không còn phản ứng khi đánh (có thể đã chết) -> bỏ qua, tìm mục tiêu khác.');
+              break;
+            }
+          }
+        } else {
+          await sleep(400);
         }
 
         if (Date.now() - batDau > 20000) break;
-
-        await sleep(400);
       }
 
+      bot.setControlState('sprint', false);
       try { bot.pathfinder.setGoal(null); } catch (e) {}
     }
 
@@ -372,20 +437,26 @@ function startBot(delay = 0) {
       setTimeout(() => { dangXuLySuKienDungeon = false; }, 3000);
     }
 
-    // "Phần thưởng ải" -> /is, đi tới trước 2s, vô lại ải rồi Khởi Động lại
+    // "Phần thưởng ải" -> chờ 6s, /is, đi thẳng 3s, rồi mới vô lại dungeon và Khởi Động lại
     async function xuLyCoThuong() {
       if (done || dangXuLySuKienDungeon) return;
       dangXuLySuKienDungeon = true;
-      log('"Phần thưởng ải" -> /is, đi tới 2s, vô lại dungeon rồi Khởi Động lại.');
+      log('"Phần thưởng ải" -> chờ 6s, /is, đi thẳng 3s, vô lại dungeon rồi Khởi Động lại.');
       farmActive = false;
       try { bot.pathfinder.setGoal(null); } catch (e) {}
       bot.clearControlStates();
-      await sleep(300);
+
+      await sleep(6000);
+      if (done) return;
+
       bot.chat('/is');
-      await sleep(500);
+
       bot.setControlState('forward', true);
-      await sleep(2000);
+      bot.setControlState('sprint', true);
+      await sleep(3000);
       bot.setControlState('forward', false);
+      bot.setControlState('sprint', false);
+
       await voDungeon();
       await khoiDong();
       setTimeout(() => { dangXuLySuKienDungeon = false; }, 3000);
