@@ -9,6 +9,13 @@ const VERSION  = '1.21.4';
 const USERNAME = '_BachPremium'; 
 const PASSWORD = 'TaoLaTraiDep';
 
+// Lệnh vô / vô lại dungeon - chỉnh 1 chỗ này là áp dụng cho mọi nơi
+const CMD_VO_DUNGEON = '/warp dungeon1';
+
+// Bán kính (khối) quét quái / BOSS - tăng lên nếu phòng dungeon rộng
+const BAN_KINH_TIM_QUAI = 20;
+const BAN_KINH_TIM_BOSS = 28;
+
 const C = { green: '\x1b[32m', cyan: '\x1b[36m', yellow: '\x1b[33m', red: '\x1b[31m', reset: '\x1b[0m' };
 
 process.on('uncaughtException', err => { if (err.code !== 'EPIPE' && err.name !== 'PartialReadError') console.error('Lỗi:', err.message); });
@@ -80,15 +87,11 @@ function startBot(delay = 0) {
 
     // ============================================================
     //  KHỞI ĐỘNG
-    //  - Vào ải (/taf triggerbot)
-    //  - Mỗi lần vô ải/vô lại ải: chờ 1s, nhảy tại chỗ 1.5s, rồi kiểm
-    //    tra. Nếu KHÔNG có quái quanh đó HOẶC KHÔNG thấy dòng chat
-    //    "Hãy hoàn thành thức tỉnh để tham gia cuộc chinh phạt!" thì
-    //    chọn bừa 1 hướng đi khoảng 5s (đi tới đâu quét quái tới đó,
-    //    thấy là bỏ đi lung tung, chạy thẳng tới đánh).
-    //  - Không thấy quái sau khi đi -> vô lại ải, lặp lại từ đầu.
-    //  - Mấu chốt: PHẢI có quái mới được coi là xong Khởi Động, rồi
-    //    mới chuyển sang farmLoop().
+    //  FIX: coThongBaoThucTinh không còn được reset mỗi vòng lặp nữa
+    //  (server chỉ gửi dòng "Hãy hoàn thành thức tỉnh..." MỘT LẦN khi
+    //  vừa vô ải, không lặp lại mỗi 2.5s, nên yêu cầu nó true trong
+    //  từng vòng lặp khiến bot luôn báo "không có quái" dù có quái
+    //  thật ở gần). Giờ chỉ cần tìm THẤY quái là đủ điều kiện.
     // ============================================================
 
     async function khoiDong() {
@@ -96,25 +99,25 @@ function startBot(delay = 0) {
       phase = 'khoiDong';
       log('=== KHỞI ĐỘNG ===');
 
-      // joinSky() đã tắt physics trước đó -> bật lại để nhảy/di chuyển được
       bot.physics.enabled = true;
       try { bot.pathfinder.setMovements(new Movements(bot)); } catch (e) {}
 
+      await voDungeon();       // vô dungeon lần đầu (/warp dungeon1)
       bot.chat('/taf triggerbot');
       await sleep(rand(1500, 2000));
+      coThongBaoThucTinh = false; // reset 1 lần khi mới vô, không reset mỗi vòng lặp
 
       let coQuai = false;
 
       while (!done && !coQuai) {
-        coThongBaoThucTinh = false; // reset cờ mỗi lượt kiểm tra
-
         await sleep(1000);
         await nhaySoTaiCho(1500);
 
-        const quaiGanNhat = timQuaiGanNhat(16);
+        const quaiGanNhat = timQuaiGanNhat(BAN_KINH_TIM_QUAI);
 
-        if (!quaiGanNhat || !coThongBaoThucTinh) {
+        if (!quaiGanNhat) {
           log('Chưa thấy quái, chọn hướng đi tìm...');
+          debugDanhSachEntity(BAN_KINH_TIM_QUAI);
           const timThay = await diChuyenNgauNhienVaTimQuai(5000);
 
           if (timThay) {
@@ -122,11 +125,12 @@ function startBot(delay = 0) {
             log('Đã phát hiện quái!');
           } else {
             log('Không có quái, vô lại dungeon...');
-            await voLaiDungeon();
+            await voDungeon();
+            coThongBaoThucTinh = false; // reset lại vì vừa vô ải mới
           }
         } else {
           coQuai = true;
-          log('Đã có quái sẵn, bắt đầu farm!');
+          log(`Đã có quái sẵn (${getTenTuyChinh(quaiGanNhat) || quaiGanNhat.name || quaiGanNhat.type}), bắt đầu farm!`);
         }
       }
 
@@ -162,7 +166,7 @@ function startBot(delay = 0) {
 
       while (Date.now() < ketThuc && !done) {
         await sleep(300);
-        quaiTimThay = timQuaiGanNhat(16);
+        quaiTimThay = timQuaiGanNhat(BAN_KINH_TIM_QUAI);
         if (quaiTimThay) break;
       }
 
@@ -175,23 +179,15 @@ function startBot(delay = 0) {
       return false;
     }
 
-    // Vô lại ải/dungeon.
-    // TODO: nếu server dùng 1 lệnh khác (không phải /taf triggerbot) để reset /
-    // vào lại 1 ải mới, đổi lại ở đây.
-    async function voLaiDungeon() {
+    // Vô dungeon / vô lại dungeon bằng lệnh riêng.
+    async function voDungeon() {
       if (done) return;
-      bot.chat('/taf triggerbot');
+      bot.chat(CMD_VO_DUNGEON);
       await sleep(rand(1500, 2000));
     }
 
     // ============================================================
     //  FARM
-    //  - Ưu tiên tuyệt đối: có sinh vật tên chứa "BOSS" -> chạy tới
-    //    đánh ngay lập tức, kể cả khi đang đánh quái thường dở dang.
-    //  - Không có BOSS -> tìm quái thường gần nhất để đánh.
-    //  - Việc kiểm tra BOSS được lặp liên tục (khoảng vài trăm ms một
-    //    lần, gần tương đương kiểm tra theo tick) trong lúc đang di
-    //    chuyển/đánh, chứ không chỉ kiểm tra 1 lần rồi thôi.
     // ============================================================
 
     async function batDauFarm() {
@@ -204,20 +200,18 @@ function startBot(delay = 0) {
 
     async function farmLoop() {
       while (!done && farmActive) {
-        const boss = timBossGanNhat(24);
-        const mucTieu = boss || timQuaiGanNhat(16);
+        const boss = timBossGanNhat(BAN_KINH_TIM_BOSS);
+        const mucTieu = boss || timQuaiGanNhat(BAN_KINH_TIM_QUAI);
 
         if (!mucTieu) {
           await sleep(300);
           continue;
         }
 
-        if (boss) log('Phát hiện BOSS -> chạy tới đánh ngay.');
+        if (boss) log(`Phát hiện BOSS (${getTenTuyChinh(boss)}) -> chạy tới đánh ngay.`);
 
         await diChuyenToiVaDanhQuai(mucTieu, () => {
-          // Đang đánh quái thường mà có BOSS xuất hiện -> huỷ giữa
-          // chừng để farmLoop lặp lại và ưu tiên đánh BOSS trước.
-          if (!isBossEntity(mucTieu)) return !!timBossGanNhat(24);
+          if (!isBossEntity(mucTieu)) return !!timBossGanNhat(BAN_KINH_TIM_BOSS);
           return false;
         });
 
@@ -225,8 +219,6 @@ function startBot(delay = 0) {
       }
     }
 
-    // Di chuyển tới 1 quái/BOSS và đánh cho tới khi nó biến mất (chết)
-    // hoặc bị huỷ giữa chừng bởi kiemTraHuyGiuaChung().
     async function diChuyenToiVaDanhQuai(quai, kiemTraHuyGiuaChung) {
       if (!quai) return;
       try { bot.pathfinder.setGoal(new goals.GoalFollow(quai, 2), true); } catch (e) {}
@@ -241,19 +233,51 @@ function startBot(delay = 0) {
           bot.attack(quai);
         }
 
-        if (Date.now() - batDau > 20000) break; // an toàn, tránh kẹt vô hạn với 1 con quái
+        if (Date.now() - batDau > 20000) break;
 
-        await sleep(400); // chỉnh nhanh/chậm theo tốc độ đánh vũ khí nếu cần
+        await sleep(400);
       }
 
       try { bot.pathfinder.setGoal(null); } catch (e) {}
     }
 
-    // Tìm quái thường gần nhất trong bán kính `banKinh` (khối)
-    function timQuaiGanNhat(banKinh = 16) {
+    const LOAI_KHONG_PHAI_QUAI = new Set([
+      'item', 'arrow', 'spectral_arrow', 'trident', 'snowball', 'egg',
+      'experience_orb', 'experience_bottle', 'fishing_bobber', 'firework_rocket',
+      'tnt', 'falling_block', 'item_frame', 'glow_item_frame', 'painting',
+      'leash_knot', 'end_crystal', 'evoker_fangs', 'block_display',
+      'item_display', 'text_display', 'marker', 'boat', 'chest_boat',
+      'minecart', 'chest_minecart', 'lightning_bolt'
+    ]);
+
+    function coTheLaQuai(e) {
+      if (!e || e === bot.entity || !e.position) return false;
+      if (e.type === 'player' || e.type === 'orb') return false;
+      const ten = (e.name || '').toLowerCase();
+      if (LOAI_KHONG_PHAI_QUAI.has(ten)) return false;
+      return true;
+    }
+
+    function debugDanhSachEntity(banKinh = 20) {
+      if (!bot.entity) return;
+      const ds = Object.values(bot.entities)
+        .filter(e => e && e !== bot.entity && e.position)
+        .map(e => ({
+          type: e.type,
+          kind: e.kind,
+          name: e.name,
+          ten: getTenTuyChinh(e),
+          kc: +bot.entity.position.distanceTo(e.position).toFixed(1)
+        }))
+        .filter(x => x.kc <= banKinh)
+        .sort((a, b) => a.kc - b.kc);
+      log(`[DEBUG] Entity trong bán kính ${banKinh}: ${JSON.stringify(ds)}`);
+    }
+
+    function timQuaiGanNhat(banKinh = BAN_KINH_TIM_QUAI) {
       if (!bot.entity) return null;
       const ds = Object.values(bot.entities).filter(e => {
-        if (!e || e === bot.entity || e.type !== 'mob') return false;
+        if (!coTheLaQuai(e)) return false;
         return bot.entity.position.distanceTo(e.position) <= banKinh;
       });
       if (!ds.length) return null;
@@ -261,11 +285,10 @@ function startBot(delay = 0) {
       return ds[0];
     }
 
-    // Tìm BOSS gần nhất (sinh vật có chữ "BOSS" trong tên) trong bán kính `banKinh`
-    function timBossGanNhat(banKinh = 24) {
+    function timBossGanNhat(banKinh = BAN_KINH_TIM_BOSS) {
       if (!bot.entity) return null;
       const ds = Object.values(bot.entities).filter(e => {
-        if (!e || e === bot.entity || e.type !== 'mob') return false;
+        if (!coTheLaQuai(e)) return false;
         if (!isBossEntity(e)) return false;
         return bot.entity.position.distanceTo(e.position) <= banKinh;
       });
@@ -279,22 +302,55 @@ function startBot(delay = 0) {
       return ten.includes('BOSS');
     }
 
-    // Cố lấy tên tuỳ chỉnh (name tag) của 1 entity từ metadata.
-    // LƯU Ý: mineflayer không tự decode sẵn tên tuỳ chỉnh cho mob, nên
-    // hàm này quét metadata tìm phần giống chat component có chữ. Nếu
-    // không nhận đúng tên BOSS trên server thật, hãy log `quai.metadata`
-    // lúc BOSS xuất hiện để xem cấu trúc thật rồi chỉnh lại hàm này.
+    // FIX: đọc tên tuỳ chỉnh (nametag) đúng vị trí metadata chuẩn
+    // (index 2 = custom name, dạng optional chat component, theo spec
+    // Entity base của Minecraft 1.21.x), có xử lý cả dạng wrap
+    // {present, value} lẫn dạng raw, và cả trường hợp value là chuỗi
+    // JSON của chat component thay vì object sẵn. Nếu index 2 trống,
+    // fallback quét toàn bộ metadata như bản cũ để không bỏ sót
+    // trường hợp server đặt tên ở vị trí khác.
+    function chatComponentToText(comp) {
+      if (!comp) return '';
+      if (typeof comp === 'string') return comp;
+      let s = comp.text || '';
+      if (Array.isArray(comp.extra)) s += comp.extra.map(chatComponentToText).join('');
+      return s;
+    }
+
     function getTenTuyChinh(e) {
       try {
         if (e.username) return e.username;
+
         if (Array.isArray(e.metadata)) {
+          // 1) Thử đúng vị trí chuẩn trước (index 2 = custom name)
+          const raw2 = e.metadata[2];
+          const val2 = (raw2 && typeof raw2 === 'object' && 'present' in raw2 && 'value' in raw2)
+            ? (raw2.present ? raw2.value : null)
+            : raw2;
+
+          if (val2) {
+            if (typeof val2 === 'string') {
+              try {
+                const parsed = JSON.parse(val2);
+                const t = chatComponentToText(parsed);
+                if (t.trim()) return t;
+              } catch (_) {
+                if (val2.trim()) return val2;
+              }
+            } else if (typeof val2 === 'object') {
+              const t = chatComponentToText(val2);
+              if (t.trim()) return t;
+            }
+          }
+
+          // 2) Fallback: quét toàn bộ metadata như bản cũ, phòng khi
+          // server đặt tên ở vị trí khác chuẩn
           for (const item of e.metadata) {
             if (!item) continue;
             if (typeof item === 'string' && item.trim()) return item;
             if (typeof item === 'object' && typeof item.text === 'string') {
-              let s = item.text;
-              if (Array.isArray(item.extra)) s += item.extra.map(x => (x && x.text) || '').join('');
-              if (s.trim()) return s;
+              const t = chatComponentToText(item);
+              if (t.trim()) return t;
             }
           }
         }
@@ -302,12 +358,7 @@ function startBot(delay = 0) {
       return '';
     }
 
-    // ============================================================
-    //  2 mốc chat quan trọng trong lúc farm
-    // ============================================================
-
-    // "Ải này không có thưởng rơi" -> vô lại ải, KHÔNG gọi lại Khởi Động,
-    // tiếp tục farm ngay (ưu tiên BOSS / quái thường như bình thường).
+    // "Ải này không có thưởng rơi" -> vô lại ải, KHÔNG gọi lại Khởi Động
     async function xuLyKhongCoThuong() {
       if (done || dangXuLySuKienDungeon) return;
       dangXuLySuKienDungeon = true;
@@ -316,13 +367,12 @@ function startBot(delay = 0) {
       try { bot.pathfinder.setGoal(null); } catch (e) {}
       bot.clearControlStates();
       await sleep(500);
-      await voLaiDungeon();
+      await voDungeon();
       batDauFarm();
       setTimeout(() => { dangXuLySuKienDungeon = false; }, 3000);
     }
 
-    // "Phần thưởng ải" -> /is, đi tới trước 2s, vô lại ải rồi gọi lại
-    // Khởi Động để xác nhận có quái trước khi farm tiếp.
+    // "Phần thưởng ải" -> /is, đi tới trước 2s, vô lại ải rồi Khởi Động lại
     async function xuLyCoThuong() {
       if (done || dangXuLySuKienDungeon) return;
       dangXuLySuKienDungeon = true;
@@ -336,7 +386,7 @@ function startBot(delay = 0) {
       bot.setControlState('forward', true);
       await sleep(2000);
       bot.setControlState('forward', false);
-      await voLaiDungeon();
+      await voDungeon();
       await khoiDong();
       setTimeout(() => { dangXuLySuKienDungeon = false; }, 3000);
     }
@@ -374,10 +424,8 @@ function startBot(delay = 0) {
         return;
       }
       
-      // Ẩn log hiển thị máu (ActionBar)
       if (clean.includes('❤')) return;
 
-      // --- Các mốc chat dùng cho KHỞI ĐỘNG / farm ---
       if (clean.includes('Hãy hoàn thành thức tỉnh để tham gia cuộc chinh phạt')) {
         coThongBaoThucTinh = true;
       }
