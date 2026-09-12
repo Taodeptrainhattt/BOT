@@ -6,8 +6,8 @@ const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const HOST     = 'mc.minerua.com';
 const PORT     = 25565;
 const VERSION  = '1.21.4';
-const USERNAME = '_BachPremium'; 
-const PASSWORD = 'TaoLaTraiDep';
+const USERNAME = '_Ci'; 
+const PASSWORD = 'nguyentrungtinh0102';
 
 // Lệnh vô / vô lại dungeon - chỉnh 1 chỗ này là áp dụng cho mọi nơi
 const CMD_VO_DUNGEON = '/warp dungeon1';
@@ -20,6 +20,15 @@ const BAN_KINH_TIM_BOSS = 28;
 const TEN_DEN_ECH = ['ochre_froglight', 'verdant_froglight', 'pearlescent_froglight'];
 const BAN_KINH_TIM_DEN_ECH = 64;
 const KHOANG_CACH_DUNG_CANH_DEN_ECH = 1; // đứng cách đèn ếch xa nhất 1 block
+
+// Tổng % tốc độ cộng dồn từ skill MMO của server (vd "Cung Thủ") — server
+// KHÔNG gửi số này qua bất kỳ gói tin mạng nào (đã kiểm chứng qua log thật:
+// không qua attribute, effect, velocity hay position) nên bot không thể tự
+// đọc được, phải khai báo thủ công đúng số thật đọc trong GUI skill.
+// Cách tính: cấp hiện tại × chỉ số "Tốc Độ: +x/cấp" hiển thị trong GUI.
+// VD: cấp 459, +3.0E-4/cấp -> 459 * 0.0003 = 0.1377 (tức +13.77%).
+// ⚠️ PHẢI TỰ CẬP NHẬT LẠI SỐ NÀY mỗi khi skill lên cấp, bot không tự biết.
+const TOC_DO_TU_SKILL_MMO = 459 * 0.0003; // = 0.1377 -> đổi 459 thành cấp thật hiện tại của bạn
 
 const C = { green: '\x1b[32m', cyan: '\x1b[36m', yellow: '\x1b[33m', red: '\x1b[31m', reset: '\x1b[0m' };
 
@@ -56,6 +65,11 @@ function startBot(delay = 0) {
     let viTriDenEchHienTai = null;
 
     let nhayLienTucInt = null;
+    let vaTocDoInt = null;
+    let tpaCheckInt = null;
+    let tafCheckInt = null;
+    let dangXuLyBiKickDungeon = false;
+    let dangXuLyBatTaf = false;
 
     const log = msg => console.log(`[${USERNAME}] ${msg}`);
 
@@ -135,6 +149,9 @@ function startBot(delay = 0) {
       if (balInt) clearInterval(balInt);
       if (nhayLienTucInt) clearInterval(nhayLienTucInt);
       if (debugTocDoInt) clearInterval(debugTocDoInt);
+      if (vaTocDoInt) clearInterval(vaTocDoInt);
+      if (tpaCheckInt) clearInterval(tpaCheckInt);
+      if (tafCheckInt) clearInterval(tafCheckInt);
       activeBot = null;
       log(`Recon: ${rsn}`);
       try { bot.end(); } catch(_) {}
@@ -178,6 +195,71 @@ function startBot(delay = 0) {
     //  thật ở gần). Giờ chỉ cần tìm THẤY quái là đủ điều kiện.
     // ============================================================
 
+    // ============================================================
+    //  KIỂM TRA BỊ KICK KHỎI DUNGEON (qua /tpa mỗi 30s)
+    //  Nếu chat trả lời "can't use /tpa" -> coi như đã bị kick khỏi
+    //  dungeon, vô lại dungeon và Khởi Động lại từ đầu.
+    // ============================================================
+    async function xuLyBiKickKhoiDungeon() {
+      if (done || dangXuLyBiKickDungeon) return;
+      dangXuLyBiKickDungeon = true;
+      log('Phát hiện bị kick khỏi dungeon (qua /tpa) -> vô lại dungeon và Khởi Động lại.');
+      farmActive = false;
+      try { bot.pathfinder.setGoal(null); } catch (e) {}
+      bot.clearControlStates();
+      await voDungeon();
+      await khoiDong();
+      dangXuLyBiKickDungeon = false;
+    }
+
+    // ============================================================
+    //  LISTENER CHUNG: bất kỳ lúc nào chat xuất hiện chữ "Bật!" (không
+    //  riêng lúc gửi /taf autofarm) -> chờ 5s rồi gửi /taf triggerbotriggerbot.
+    // ============================================================
+    async function xuLyBatTaf() {
+      if (done || dangXuLyBatTaf) return;
+      dangXuLyBatTaf = true;
+      await sleep(5000);
+      if (!done) bot.chat('/taf triggerbotriggerbot');
+      dangXuLyBatTaf = false;
+    }
+
+    // ============================================================
+    //  KIỂM TRA /taf autofarm MỖI 60s
+    //  Gửi /taf autofarm, chờ xem chat có chữ "Bật!" xuất hiện trong ~3s hay
+    //  không:
+    //  - Có "Bật!" -> đã có listener chat chung (xuLyBatTaf) tự lo phần
+    //    chờ 5s rồi gửi /taf triggerbotriggerbot, hàm này không cần làm gì thêm.
+    //  - Không có "Bật!" -> gửi /taf triggerbotriggerbot ngay (không chờ).
+    // ============================================================
+    async function chuKyKiemTraTaf() {
+      if (done) return;
+      bot.chat('/taf autofarm');
+
+      const coBat = await new Promise(resolve => {
+        let xong = false;
+        const h = msg => {
+          if (xong) return;
+          const clean = msg.toString().replace(/§[0-9a-fklmnor]/gi, '');
+          if (clean.includes('Bật!')) {
+            xong = true;
+            bot.removeListener('message', h);
+            resolve(true);
+          }
+        };
+        bot.on('message', h);
+        setTimeout(() => {
+          if (xong) return;
+          xong = true;
+          bot.removeListener('message', h);
+          resolve(false);
+        }, 3000);
+      });
+
+      if (done) return;
+      if (!coBat) bot.chat('/taf triggerbotriggerbot');
+    }
+
     async function khoiDong() {
       if (done) return;
       phase = 'khoiDong';
@@ -197,8 +279,17 @@ function startBot(delay = 0) {
       batDauNhayKhiDiChuyen();
       batDauDebugTocDo();
 
+      // 2 vòng kiểm tra định kỳ mới — chỉ khởi động 1 lần (khoiDong có thể
+      // được gọi lại nhiều lần), tất cả đều nằm sau đoạn joined như yêu cầu.
+      if (!tpaCheckInt) {
+        tpaCheckInt = setInterval(() => { if (!done) bot.chat('/tpa'); }, 30000);
+      }
+      if (!tafCheckInt) {
+        tafCheckInt = setInterval(() => { if (!done) chuKyKiemTraTaf(); }, 60000);
+      }
+
       await voDungeon();       // vô dungeon lần đầu (/warp dungeon1)
-      bot.chat('/taf triggerbot');
+      bot.chat('/taf triggerbotriggerbot');
       await sleep(rand(1500, 2000));
       coThongBaoThucTinh = false; // reset 1 lần khi mới vô, không reset mỗi vòng lặp
 
@@ -656,9 +747,118 @@ function startBot(delay = 0) {
       await khoiDong();
     });
 
+    // ============================================================
+    //  VÁ LỖI TỐC ĐỘ: thư viện vật lý mineflayer dùng (prismarine-
+    //  physics) tính ra mức Speed/Slowness (this.speed/this.slowness)
+    //  nhưng KHÔNG hề dùng chúng để tính vận tốc — nó chỉ đọc attribute
+    //  "minecraft:movement_speed" mà server gửi (ở server này gửi giá
+    //  trị 0) cộng bonus sprint. Vì vậy Speed III thật sự KHÔNG được
+    //  áp dụng vào việc bot di chuyển dù bot đang có hiệu ứng đó.
+    //  Fix: tự tính lại attribute này y hệt công thức vanilla thật
+    //  (client Minecraft gốc tự làm việc này mỗi khi effect thay đổi):
+    //  Speed: nhân tổng dồn +20% mỗi cấp (amplifier+1).
+    //  Slowness: nhân tổng dồn -15% mỗi cấp, không cho xuống dưới 0.
+    // ============================================================
+    const KEY_ATTR_TOC_DO = 'minecraft:movement_speed';
+    const UUID_MOD_SPEED = '91aeaa56-376b-4498-935b-2f7f68070635';
+    const UUID_MOD_SLOWNESS = '7107de5e-7ce8-4030-940e-514c1f160890';
+    const UUID_MOD_VAT_PHAM = 'a1b2c3d4-e5f6-4a1b-8c9d-1234567890ab'; // UUID tự đặt, chỉ dùng nội bộ để lọc/thay thế
+    const UUID_MOD_SKILL_MMO = 'b2c3d4e5-f6a7-4b2c-9d0e-234567890abc'; // UUID tự đặt cho phần bonus skill MMO
+    const BASE_TOC_DO_VANILLA = 0.1; // base chuẩn của player khi đi bộ
+
+    // Đọc chỉ số "Movement Speed: +N" thật trong lore của vật phẩm đang
+    // cầm (dữ liệu có thật của chính item, không phải suy đoán) và quy
+    // đổi thành phần trăm cộng dồn (N=3 -> 0.03), khớp đúng với giá trị
+    // MMOITEMS_MOVEMENT_SPEED trong NBT thật của item.
+    function layMovementSpeedTuVatPhamDangCam() {
+      try {
+        const item = bot.heldItem;
+        const lore = item && item.customLore;
+        if (!Array.isArray(lore)) return 0;
+        for (const dong of lore) {
+          const chu = chatComponentToText(dong);
+          const m = chu.match(/Movement Speed:\s*\+?(-?\d+(?:\.\d+)?)/i);
+          if (m) return parseFloat(m[1]) / 100;
+        }
+      } catch (e) {}
+      return 0;
+    }
+
+    function capNhatAttributeTocDoTheoHieuUng() {
+      if (!bot.entity) return;
+      const effects = bot.entity.effects || {};
+      const capSpeed = effects[0] ? effects[0].amplifier + 1 : 0;    // id 0 = Speed
+      const capSlowness = effects[1] ? effects[1].amplifier + 1 : 0; // id 1 = Slowness
+      const boSuaTuVatPham = layMovementSpeedTuVatPhamDangCam();      // vd 0.03 = +3%
+
+      const attrHienTai = bot.entity.attributes && bot.entity.attributes[KEY_ATTR_TOC_DO];
+      // Nếu server gửi base = 0 (bất thường, không dùng được để đi lại) thì
+      // dùng base chuẩn vanilla; giữ nguyên base nếu server gửi giá trị hợp lý.
+      const baseGoc = attrHienTai && attrHienTai.value > 0 ? attrHienTai.value : BASE_TOC_DO_VANILLA;
+
+      // Giữ lại các modifier khác (nếu có, vd modifier gốc từ server) trừ 4
+      // modifier do chính hàm này thêm vào trước đó -> tránh cộng dồn sai.
+      const modifiersKhac = ((attrHienTai && attrHienTai.modifiers) || []).filter(
+        m => m.uuid !== UUID_MOD_SPEED && m.uuid !== UUID_MOD_SLOWNESS &&
+             m.uuid !== UUID_MOD_VAT_PHAM && m.uuid !== UUID_MOD_SKILL_MMO
+      );
+
+      const modifiersMoi = [...modifiersKhac];
+      if (capSpeed > 0) {
+        modifiersMoi.push({ uuid: UUID_MOD_SPEED, amount: 0.2 * capSpeed, operation: 2 });
+      }
+      if (capSlowness > 0) {
+        modifiersMoi.push({ uuid: UUID_MOD_SLOWNESS, amount: Math.max(-1, -0.15 * capSlowness), operation: 2 });
+      }
+      if (boSuaTuVatPham !== 0) {
+        modifiersMoi.push({ uuid: UUID_MOD_VAT_PHAM, amount: boSuaTuVatPham, operation: 2 });
+      }
+      if (TOC_DO_TU_SKILL_MMO !== 0) {
+        modifiersMoi.push({ uuid: UUID_MOD_SKILL_MMO, amount: TOC_DO_TU_SKILL_MMO, operation: 2 });
+      }
+
+      if (!bot.entity.attributes) bot.entity.attributes = {};
+      bot.entity.attributes[KEY_ATTR_TOC_DO] = { value: baseGoc, modifiers: modifiersMoi };
+    }
+
+    // Chạy định kỳ để chắc ăn (phòng khi bỏ lỡ sự kiện effect nào đó),
+    // ngoài việc gọi ngay mỗi khi effect thay đổi ở các listener bên dưới.
+    vaTocDoInt = setInterval(() => { if (!done) capNhatAttributeTocDoTheoHieuUng(); }, 1000);
+    bot.on('heldItemChanged', () => { if (!done) capNhatAttributeTocDoTheoHieuUng(); });
+
     bot.on('bossBarCreated', xuLyBossBarThayDoi);
     bot.on('bossBarUpdated', xuLyBossBarThayDoi);
     bot.on('bossBarDeleted', () => { dangBaoVeTraiTim = false; });
+
+    // Log đối chiếu: hiệu ứng mới xuất hiện/hết + thời điểm bot bị đánh
+    // trúng, để xác nhận Slowness/Weakness/Hunger có phải do quái đánh
+    // trúng gây ra hay không (so thời gian giữa 2 dòng log này).
+    // Bắt gói tin THÔ (không qua lớp trừu tượng của mineflayer) để xem
+    // server có đẩy tốc độ cho bot qua velocity hoặc ép vị trí thẳng
+    // (teleport) hay không — vì đã xác nhận KHÔNG qua attribute/effect
+    // chuẩn. Chỉ log khi entityId trùng với bot (bỏ qua entity khác).
+    bot._client.on('entity_velocity', packet => {
+      if (!bot.entity || packet.entityId !== bot.entity.id) return;
+      log(`[GÓI VELOCITY CHO BOT] x=${packet.velocity.x} y=${packet.velocity.y} z=${packet.velocity.z}`);
+    });
+    bot._client.on('position', packet => {
+      log(`[GÓI POSITION ÉP BỞI SERVER] x=${packet.x.toFixed(2)} y=${packet.y.toFixed(2)} z=${packet.z.toFixed(2)} dx=${!!(packet.flags & 1)} dy=${!!(packet.flags & 2)} dz=${!!(packet.flags & 4)}`);
+    });
+
+    bot.on('entityHurt', entity => {
+      if (done || !bot.entity || !entity || entity.id !== bot.entity.id) return;
+      log('[BOT BỊ ĐÁNH TRÚNG]');
+    });
+    bot.on('entityEffect', (entity, effect) => {
+      if (done || !bot.entity || !entity || entity.id !== bot.entity.id) return;
+      log(`[HIỆU ỨNG MỚI] id=${effect.id} amplifier=${effect.amplifier} duration=${effect.duration}`);
+      capNhatAttributeTocDoTheoHieuUng();
+    });
+    bot.on('entityEffectEnd', (entity, effect) => {
+      if (done || !bot.entity || !entity || entity.id !== bot.entity.id) return;
+      log(`[HIỆU ỨNG HẾT] id=${effect.id}`);
+      capNhatAttributeTocDoTheoHieuUng();
+    });
 
     bot.on('windowOpen', w => {
       if (done || guiBusy || phase === 'skyMenu' || phase === 'skyUpdated') return;
@@ -685,6 +885,12 @@ function startBot(delay = 0) {
       }
       if (clean.includes('Phần thưởng ải')) {
         xuLyCoThuong();
+      }
+      if (clean.toLowerCase().includes("can't use /tpa")) {
+        xuLyBiKickKhoiDungeon();
+      }
+      if (clean.includes('Bật!')) {
+        xuLyBatTaf();
       }
 
       if (ignoreChat) return;
