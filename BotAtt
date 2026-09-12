@@ -214,13 +214,13 @@ function startBot(delay = 0) {
 
     // ============================================================
     //  LISTENER CHUNG: bất kỳ lúc nào chat xuất hiện chữ "Bật!" (không
-    //  riêng lúc gửi /taf autofarm) -> chờ 5s rồi gửi /taf triggerbotriggerbot.
+    //  riêng lúc gửi /taf autofarm) -> chờ 5s rồi gửi /taf triggerbot.
     // ============================================================
     async function xuLyBatTaf() {
       if (done || dangXuLyBatTaf) return;
       dangXuLyBatTaf = true;
       await sleep(5000);
-      if (!done) bot.chat('/taf triggerbotriggerbot');
+      if (!done) bot.chat('/taf triggerbot');
       dangXuLyBatTaf = false;
     }
 
@@ -229,8 +229,8 @@ function startBot(delay = 0) {
     //  Gửi /taf autofarm, chờ xem chat có chữ "Bật!" xuất hiện trong ~3s hay
     //  không:
     //  - Có "Bật!" -> đã có listener chat chung (xuLyBatTaf) tự lo phần
-    //    chờ 5s rồi gửi /taf triggerbotriggerbot, hàm này không cần làm gì thêm.
-    //  - Không có "Bật!" -> gửi /taf triggerbotriggerbot ngay (không chờ).
+    //    chờ 5s rồi gửi /taf triggerbot, hàm này không cần làm gì thêm.
+    //  - Không có "Bật!" -> gửi /taf triggerbot ngay (không chờ).
     // ============================================================
     async function chuKyKiemTraTaf() {
       if (done) return;
@@ -241,7 +241,7 @@ function startBot(delay = 0) {
         const h = msg => {
           if (xong) return;
           const clean = msg.toString().replace(/§[0-9a-fklmnor]/gi, '');
-          if (clean.includes('Bật!')) {
+          if (clean.includes('tắt.')) {
             xong = true;
             bot.removeListener('message', h);
             resolve(true);
@@ -257,7 +257,7 @@ function startBot(delay = 0) {
       });
 
       if (done) return;
-      if (!coBat) bot.chat('/taf triggerbotriggerbot');
+      if (!coBat) bot.chat('/taf triggerbot');
     }
 
     async function khoiDong() {
@@ -289,7 +289,7 @@ function startBot(delay = 0) {
       }
 
       await voDungeon();       // vô dungeon lần đầu (/warp dungeon1)
-      bot.chat('/taf triggerbotriggerbot');
+      bot.chat('/taf triggerbot');
       await sleep(rand(1500, 2000));
       coThongBaoThucTinh = false; // reset 1 lần khi mới vô, không reset mỗi vòng lặp
 
@@ -889,7 +889,7 @@ function startBot(delay = 0) {
       if (clean.toLowerCase().includes("can't use /tpa")) {
         xuLyBiKickKhoiDungeon();
       }
-      if (clean.includes('Bật!')) {
+      if (clean.includes('tắt.')) {
         xuLyBatTaf();
       }
 
