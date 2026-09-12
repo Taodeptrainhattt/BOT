@@ -7,7 +7,7 @@ const HOST     = 'mc.minerua.com';
 const PORT     = 25565;
 const VERSION  = '1.21.4';
 const USERNAME = '_Ci'; 
-const PASSWORD = 'nguyentrungtinh0102';
+const PASSWORD = 'taolatraidep';
 
 // Lệnh vô / vô lại dungeon - chỉnh 1 chỗ này là áp dụng cho mọi nơi
 const CMD_VO_DUNGEON = '/warp dungeon1';
@@ -20,6 +20,14 @@ const BAN_KINH_TIM_BOSS = 28;
 const TEN_DEN_ECH = ['ochre_froglight', 'verdant_froglight', 'pearlescent_froglight'];
 const BAN_KINH_TIM_DEN_ECH = 64;
 const KHOANG_CACH_DUNG_CANH_DEN_ECH = 1; // đứng cách đèn ếch xa nhất 1 block
+
+// ============================================================
+// TỰ CẦM KIẾM Ở HOTBAR SLOT 1
+// bot.setQuickBarSlot dùng chỉ số 0-based, nên "ô số 1" hiển thị trên
+// thanh hotbar (ô ngoài cùng bên trái) tương ứng index 0.
+// Đổi HOTBAR_SLOT_KIEM nếu bạn để kiếm ở ô khác (vd ô số 3 -> index 2).
+// ============================================================
+const HOTBAR_SLOT_KIEM = 0; // ô số 1 trên thanh hotbar
 
 // Tổng % tốc độ cộng dồn từ skill MMO của server (vd "Cung Thủ") — server
 // KHÔNG gửi số này qua bất kỳ gói tin mạng nào (đã kiểm chứng qua log thật:
@@ -68,10 +76,32 @@ function startBot(delay = 0) {
     let vaTocDoInt = null;
     let tpaCheckInt = null;
     let tafCheckInt = null;
+    let camKiemInt = null; // giữ interval tự cầm kiếm ở hotbar slot 1
     let dangXuLyBiKickDungeon = false;
     let dangXuLyBatTaf = false;
 
     const log = msg => console.log(`[${USERNAME}] ${msg}`);
+
+    // ============================================================
+    //  TỰ CẦM KIẾM Ở HOTBAR SLOT 1
+    //  Gọi 1 lần lúc khởi động và lặp lại định kỳ để đảm bảo bot luôn
+    //  cầm đúng ô kiếm, phòng trường hợp bị đổi tay do nhặt đồ, ăn nút
+    //  quickbar khác, hoặc server ép đổi item cầm trên tay.
+    // ============================================================
+    function camKiemSlot1() {
+      if (done || !bot.entity) return;
+      try {
+        if (bot.quickBarSlot !== HOTBAR_SLOT_KIEM) {
+          bot.setQuickBarSlot(HOTBAR_SLOT_KIEM);
+        }
+      } catch (e) {}
+    }
+
+    function batDauTuCamKiem() {
+      camKiemSlot1();
+      if (camKiemInt) return;
+      camKiemInt = setInterval(camKiemSlot1, 2000); // kiểm tra lại mỗi 2s
+    }
 
     // ============================================================
     //  NHẢY LIÊN TỤC KHI DI CHUYỂN (áp dụng cho MỌI kiểu di chuyển:
@@ -152,6 +182,7 @@ function startBot(delay = 0) {
       if (vaTocDoInt) clearInterval(vaTocDoInt);
       if (tpaCheckInt) clearInterval(tpaCheckInt);
       if (tafCheckInt) clearInterval(tafCheckInt);
+      if (camKiemInt) clearInterval(camKiemInt);
       activeBot = null;
       log(`Recon: ${rsn}`);
       try { bot.end(); } catch(_) {}
@@ -278,6 +309,7 @@ function startBot(delay = 0) {
       bot.setControlState('sprint', true);
       batDauNhayKhiDiChuyen();
       batDauDebugTocDo();
+      batDauTuCamKiem(); // đảm bảo luôn cầm kiếm ở hotbar slot 1
 
       // 2 vòng kiểm tra định kỳ mới — chỉ khởi động 1 lần (khoiDong có thể
       // được gọi lại nhiều lần), tất cả đều nằm sau đoạn joined như yêu cầu.
