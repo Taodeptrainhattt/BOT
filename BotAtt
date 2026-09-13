@@ -30,7 +30,7 @@ const KHOANG_CACH_DUNG_CANH_DEN_ECH = 1; // đứng cách đèn ếch xa nhất 
 // ⚠️ PHẢI TỰ CẬP NHẬT LẠI SỐ NÀY mỗi khi skill lên cấp, bot không tự biết.
 const TOC_DO_TU_SKILL_MMO = 459 * 0.0003; // = 0.1377 -> đổi 459 thành cấp thật hiện tại của bạn
 
-const C = { green: '\x1b[32m', cyan: '\x1b[36m', yellow: '\x1b[33m', red: '\x1b[31m', reset: '\x1b[0m' };
+const C = { green: '\x1b[32m', cyan: '\x1b[36m', yellow: '\x1b[33m', red: '\x1b[31m', white: '\x1b[37m', reset: '\x1b[0m' };
 
 process.on('uncaughtException', err => { if (err.code !== 'EPIPE' && err.name !== 'PartialReadError') console.error('Lỗi:', err.message); });
 process.on('unhandledRejection', r => {});
@@ -78,6 +78,9 @@ function startBot(delay = 0) {
       else if (/=== khởi động ===|bắt đầu farm|đã có quái|phát hiện|đã hồi sinh/i.test(msg)) mau = C.green;
       console.log(`${mau}[${USERNAME}] ${msg}${C.reset}`);
     };
+    // Chat thật lấy từ server (dòng cuối trong bot.on('message')) luôn hiện
+    // màu trắng, không phân loại theo từ khóa như log('...') ở trên.
+    const logChat = msg => console.log(`${C.white}[${USERNAME}] ${msg}${C.reset}`);
 
     function recon(rsn) {
       if (done) return;
@@ -867,7 +870,7 @@ function startBot(delay = 0) {
       }
 
       if (ignoreChat) return;
-      log(clean);
+      logChat(clean);
     });
 
     bot.on('resourcePack', (u, h) => {
