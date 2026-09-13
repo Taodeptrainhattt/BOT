@@ -216,15 +216,23 @@ function startBot(delay = 0) {
 
       if (done) return;
       if (!coBat) {
-        log('Không thấy "TriggerBot đã tắt." sau /taf autofarm -> gửi lại /taf triggerbot ngay.');
+        log('Không thấy "TriggerBot đã tắt." sau /taf autofarm -> đợi 5s (cooldown lệnh) rồi gửi lại /taf triggerbot.');
+        await sleep(5000);
+        if (done) return;
         bot.chat('/taf triggerbot');
       }
     }
 
     // Ép tay chính về đúng slot kiếm nếu bị đổi đi nơi khác (do pathfinder,
-    // do server, hay bất kỳ nguyên nhân nào khác).
+    // do server, hay bất kỳ nguyên nhân nào khác). CHỈ áp dụng sau khi đã
+    // joined và bắt đầu khoiDong/farm - lúc còn ở sảnh (init/skyMenu/
+    // skyUpdated) thì không can thiệp vào hotbar.
+    function coTheEpSlotKiem() {
+      return phase === 'khoiDong' || phase === 'farming';
+    }
+
     function epVeSlotKiem(lyDo) {
-      if (done) return;
+      if (done || !coTheEpSlotKiem()) return;
       if (bot.quickBarSlot !== SLOT_KIEM) {
         log(`Tay chính bị đổi khỏi slot kiếm${lyDo ? ` (${lyDo})` : ''} -> ép lại slot ${SLOT_KIEM + 1}.`);
         try { bot.setQuickBarSlot(SLOT_KIEM); } catch (e) {}
