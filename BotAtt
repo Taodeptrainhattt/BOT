@@ -64,7 +64,6 @@ function startBot(delay = 0) {
     let dangXuLyBaoVeTraiTim = false;   // đang trong luồng xử lý (chặn gọi trùng)
     let viTriDenEchHienTai = null;
 
-    let nhayLienTucInt = null;
     let vaTocDoInt = null;
     let tpaCheckInt = null;
     let tafCheckInt = null;
@@ -72,31 +71,6 @@ function startBot(delay = 0) {
     let dangXuLyBatTaf = false;
 
     const log = msg => console.log(`[${USERNAME}] ${msg}`);
-
-    // ============================================================
-    //  NHẢY LIÊN TỤC KHI DI CHUYỂN (áp dụng cho MỌI kiểu di chuyển:
-    //  pathfinder farm, đuổi quái, đi tìm quái, v.v. — không riêng
-    //  lúc chạy tới đánh). Cứ ~650ms kiểm tra 1 lần: nếu bot đang thực
-    //  sự di chuyển (có control forward, hoặc pathfinder đang có goal,
-    //  và vận tốc ngang > 0 thật sự chứ không phải đứng yên/bị kẹt)
-    //  thì nhích 1 nhịp nhảy. Chỉ cần gọi 1 lần lúc khởi động.
-    // ============================================================
-    function batDauNhayKhiDiChuyen() {
-      if (nhayLienTucInt) return;
-      nhayLienTucInt = setInterval(() => {
-        if (done || !bot.entity) return;
-        const coGoalPathfinder = !!(bot.pathfinder && bot.pathfinder.goal);
-        const dangDiChuyen = (bot.controlState && bot.controlState.forward) || coGoalPathfinder;
-        if (!dangDiChuyen) return;
-
-        const v = bot.entity.velocity;
-        const tocDoNgang = Math.sqrt(v.x * v.x + v.z * v.z);
-        if (tocDoNgang > 0.02) {
-          bot.setControlState('jump', true);
-          setTimeout(() => { if (!done) bot.setControlState('jump', false); }, 200);
-        }
-      }, 650);
-    }
 
     // ============================================================
     //  DEBUG TỐC ĐỘ: đo khoảng cách di chuyển thật (theo mặt phẳng
@@ -147,7 +121,6 @@ function startBot(delay = 0) {
       if (done) return;
       done = true;
       if (balInt) clearInterval(balInt);
-      if (nhayLienTucInt) clearInterval(nhayLienTucInt);
       if (debugTocDoInt) clearInterval(debugTocDoInt);
       if (vaTocDoInt) clearInterval(vaTocDoInt);
       if (tpaCheckInt) clearInterval(tpaCheckInt);
@@ -308,7 +281,6 @@ function startBot(delay = 0) {
       // Bật sprint 1 lần, giữ nguyên suốt phiên (bật/tắt liên tục mỗi lần
       // đổi hàm di chuyển trước đây gây khựng, giảm tốc trung bình).
       bot.setControlState('sprint', true);
-      batDauNhayKhiDiChuyen();
       batDauDebugTocDo();
 
       // 2 vòng kiểm tra định kỳ mới — chỉ khởi động 1 lần (khoiDong có thể
@@ -370,8 +342,6 @@ function startBot(delay = 0) {
 
     // Chọn bừa 1 hướng, đi tối đa `thoiGian` ms, vừa đi vừa quét quái
     // quanh mình. Thấy quái là dừng đi lung tung và chạy tới đánh luôn.
-    // (Việc nhảy trong lúc chạy do bộ đếm toàn cục batDauNhayKhiDiChuyen lo,
-    // áp dụng cho MỌI kiểu di chuyển chứ không riêng hàm này.)
     async function diChuyenNgauNhienVaTimQuai(thoiGian) {
       if (!bot.entity) return false;
 
@@ -449,15 +419,24 @@ function startBot(delay = 0) {
       return { hienTai: parseFloat(m[1]), toiDa: parseFloat(m[2]) };
     }
 
+    // Tín hiệu chết ĐÁNG TIN CẬY NHẤT: server gửi gói entity_status mã 3
+    // đúng lúc 1 entity thực sự chết (dùng để phát animation chết cho
+    // client) -> mineflayer emit event 'entityDead'. Đánh dấu thẳng lên
+    // entity, quaiConSong() sẽ ưu tiên đọc cờ này trước mọi cách khác.
+    bot.on('entityDead', entity => {
+      if (entity) entity.__daChet = true;
+    });
+
     // Check "còn sống" thật sự, theo thứ tự ưu tiên:
-    // 1) Entity đã biến mất khỏi world -> chắc chắn chết.
-    // 2) Máu đọc được từ tên (kiểu server RPG hiện HP trong nametag) -> dùng cái này làm chuẩn.
-    // 3) Field health chuẩn của LivingEntity (mineflayer tự parse từ metadata) nếu có.
-    // 4) Không có tín hiệu nào -> coi như còn sống (chỉ dừng khi entity biến mất hoặc hết giờ an toàn).
-    // LƯU Ý: cách (2) phụ thuộc format tên thật của server bạn; nếu không đúng dạng
-    // "hiện/tối đa", gửi mình 1 ví dụ tên quái lúc đang bị đánh để chỉnh lại regex.
+    // 1) Cờ __daChet (từ gói entity_status thật của server) -> chắc chắn nhất.
+    // 2) Entity đã biến mất khỏi world -> chắc chắn chết.
+    // 3) Máu đọc được từ tên (kiểu server RPG hiện HP trong nametag) nếu có.
+    // 4) Field health chuẩn của LivingEntity (mineflayer tự parse từ metadata) nếu có.
+    // 5) Không có tín hiệu nào -> coi như còn sống (chỉ dừng khi entity biến mất hoặc hết giờ an toàn).
     function quaiConSong(e) {
-      if (!e || !bot.entities[e.id]) return false;
+      if (!e) return false;
+      if (e.__daChet) return false;
+      if (!bot.entities[e.id]) return false;
 
       const mau = layMauQuaTen(e);
       if (mau) return mau.hienTai > 0;
