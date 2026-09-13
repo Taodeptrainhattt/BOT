@@ -28,7 +28,7 @@ const KHOANG_CACH_DUNG_CANH_DEN_ECH = 1; // đứng cách đèn ếch xa nhất 
 // Cách tính: cấp hiện tại × chỉ số "Tốc Độ: +x/cấp" hiển thị trong GUI.
 // VD: cấp 459, +3.0E-4/cấp -> 459 * 0.0003 = 0.1377 (tức +13.77%).
 // ⚠️ PHẢI TỰ CẬP NHẬT LẠI SỐ NÀY mỗi khi skill lên cấp, bot không tự biết.
-const TOC_DO_TU_SKILL_MMO = 459 * 0.0003; // = 0.1377 -> đổi 459 thành cấp thật hiện tại của bạn
+const TOC_DO_TU_SKILL_MMO = 500 * 0.0003; // = 0.1377 -> đổi 459 thành cấp thật hiện tại của bạn
 
 const C = { green: '\x1b[32m', cyan: '\x1b[36m', yellow: '\x1b[33m', red: '\x1b[31m', reset: '\x1b[0m' };
 
