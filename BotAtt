@@ -243,7 +243,7 @@ function startBot(delay = 0) {
     }
 
     // ============================================================
-    //  LISTENER CHUNG: bất kỳ lúc nào chat xuất hiện chữ "Bật!" (không
+    //  LISTENER CHUNG: bất kỳ lúc nào chat xuất hiện chữ "TriggerBot đã tắt." (không
     //  riêng lúc gửi /taf autofarm) -> chờ 5s rồi gửi /taf triggerbot.
     // ============================================================
     async function xuLyBatTaf() {
@@ -256,11 +256,11 @@ function startBot(delay = 0) {
 
     // ============================================================
     //  KIỂM TRA /taf autofarm MỖI 60s
-    //  Gửi /taf autofarm, chờ xem chat có chữ "Bật!" xuất hiện trong ~3s hay
+    //  Gửi /taf autofarm, chờ xem chat có chữ "TriggerBot đã tắt." xuất hiện trong ~3s hay
     //  không:
-    //  - Có "Bật!" -> đã có listener chat chung (xuLyBatTaf) tự lo phần
+    //  - Có "TriggerBot đã tắt." -> đã có listener chat chung (xuLyBatTaf) tự lo phần
     //    chờ 5s rồi gửi /taf triggerbot, hàm này không cần làm gì thêm.
-    //  - Không có "Bật!" -> gửi /taf triggerbot ngay (không chờ).
+    //  - Không có "TriggerBot đã tắt." -> gửi /taf triggerbot ngay (không chờ).
     // ============================================================
     async function chuKyKiemTraTaf() {
       if (done) return;
@@ -271,7 +271,7 @@ function startBot(delay = 0) {
         const h = msg => {
           if (xong) return;
           const clean = msg.toString().replace(/§[0-9a-fklmnor]/gi, '');
-          if (clean.includes('Bật!')) {
+          if (clean.includes('TriggerBot đã tắt.')) {
             xong = true;
             bot.removeListener('message', h);
             resolve(true);
@@ -611,7 +611,8 @@ function startBot(delay = 0) {
       'tnt', 'falling_block', 'item_frame', 'glow_item_frame', 'painting',
       'leash_knot', 'end_crystal', 'evoker_fangs', 'block_display',
       'item_display', 'text_display', 'marker', 'boat', 'chest_boat',
-      'minecart', 'chest_minecart', 'lightning_bolt'
+      'minecart', 'chest_minecart', 'lightning_bolt',
+      'turtle' // không đánh rùa
     ]);
 
     function coTheLaQuai(e) {
@@ -937,7 +938,7 @@ function startBot(delay = 0) {
       if (clean.includes('Phần thưởng ải')) {
         xuLyCoThuong();
       }
-      if (clean.includes('Bật!')) {
+      if (clean.includes('TriggerBot đã tắt.')) {
         xuLyBatTaf();
       }
 
