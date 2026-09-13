@@ -6,8 +6,8 @@ const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const HOST     = 'mc.minerua.com';
 const PORT     = 25565;
 const VERSION  = '1.21.4';
-const USERNAME = '_Ci'; 
-const PASSWORD = 'nguyentrungtinh0102';
+const USERNAME = '_BachPremium'; 
+const PASSWORD = 'TaoLaTraiDep';
 
 // Lệnh vô / vô lại dungeon - chỉnh 1 chỗ này là áp dụng cho mọi nơi
 const CMD_VO_DUNGEON = '/warp dungeon1';
@@ -28,7 +28,7 @@ const KHOANG_CACH_DUNG_CANH_DEN_ECH = 1; // đứng cách đèn ếch xa nhất 
 // Cách tính: cấp hiện tại × chỉ số "Tốc Độ: +x/cấp" hiển thị trong GUI.
 // VD: cấp 459, +3.0E-4/cấp -> 459 * 0.0003 = 0.1377 (tức +13.77%).
 // ⚠️ PHẢI TỰ CẬP NHẬT LẠI SỐ NÀY mỗi khi skill lên cấp, bot không tự biết.
-const TOC_DO_TU_SKILL_MMO = 500 * 0.0003; // = 0.1377 -> đổi 459 thành cấp thật hiện tại của bạn
+const TOC_DO_TU_SKILL_MMO = 459 * 0.0003; // = 0.1377 -> đổi 459 thành cấp thật hiện tại của bạn
 
 const C = { green: '\x1b[32m', cyan: '\x1b[36m', yellow: '\x1b[33m', red: '\x1b[31m', reset: '\x1b[0m' };
 
@@ -67,64 +67,26 @@ function startBot(delay = 0) {
     let vaTocDoInt = null;
     let tpaCheckInt = null;
     let tafCheckInt = null;
+    let vatCamTayInt = null;
     let dangXuLyBiKickDungeon = false;
     let dangXuLyBatTaf = false;
 
-    const log = msg => console.log(`[${USERNAME}] ${msg}`);
-
-    // ============================================================
-    //  DEBUG TỐC ĐỘ: đo khoảng cách di chuyển thật (theo mặt phẳng
-    //  ngang, dựa trên bot.entity.position, KHÔNG suy ra từ velocity)
-    //  mỗi giây, in ra block/s thật đang chạy. In kèm attribute
-    //  "movement_speed" (nếu server có gửi qua attribute chuẩn) và
-    //  danh sách hiệu ứng (potion effect) đang có, để xác định buff
-    //  tốc độ của server đến từ đâu:
-    //  - Nếu attribute/effect CÓ tăng lên nhưng block/s vẫn thấp ->
-    //    lỗi nằm ở việc mineflayer không áp dụng đúng giá trị đó vào
-    //    mô phỏng vật lý cục bộ -> cần tự cộng thêm tốc độ thủ công.
-    //  - Nếu attribute/effect KHÔNG hề đổi dù ngoài đời đang chạy
-    //    nhanh -> buff không đến qua attribute/effect chuẩn (có thể
-    //    qua gói tin khác, vd player_abilities chỉnh thẳng walk
-    //    speed) -> cần xử lý theo hướng khác.
-    // ============================================================
-    const CHU_KY_DEBUG_TOC_DO = 1000; // ms
-    let debugTocDoInt = null;
-    let viTriTruocDoDebug = null;
-
-    function layAttributeTocDo() {
-      const attrs = (bot.entity && bot.entity.attributes) || {};
-      const key = Object.keys(attrs).find(k => k.toLowerCase().includes('movement_speed') || k.toLowerCase().includes('movementspeed'));
-      return key ? attrs[key] : null;
-    }
-
-    function batDauDebugTocDo() {
-      if (debugTocDoInt) return;
-      viTriTruocDoDebug = bot.entity ? bot.entity.position.clone() : null;
-      debugTocDoInt = setInterval(() => {
-        if (done || !bot.entity) return;
-        const viTriHienTai = bot.entity.position;
-        if (viTriTruocDoDebug) {
-          const dx = viTriHienTai.x - viTriTruocDoDebug.x;
-          const dz = viTriHienTai.z - viTriTruocDoDebug.z;
-          const quangDuong = Math.sqrt(dx * dx + dz * dz);
-          const tocDo = quangDuong / (CHU_KY_DEBUG_TOC_DO / 1000);
-          const attrTocDo = layAttributeTocDo();
-          const hieuUng = bot.entity.effects || {};
-          log(`[TỐC ĐỘ] ${tocDo.toFixed(2)} block/s | sprint=${!!(bot.controlState && bot.controlState.sprint)} | ` +
-              `attribute_toc_do=${attrTocDo ? JSON.stringify(attrTocDo) : 'không có'} | hieu_ung=${JSON.stringify(hieuUng)}`);
-        }
-        viTriTruocDoDebug = viTriHienTai.clone();
-      }, CHU_KY_DEBUG_TOC_DO);
-    }
+    const log = msg => {
+      let mau = C.cyan;
+      if (/lỗi|error|recon/i.test(msg)) mau = C.red;
+      else if (/cảnh báo|warning|chưa thấy quái|không có/i.test(msg)) mau = C.yellow;
+      else if (/=== khởi động ===|bắt đầu farm|đã có quái|phát hiện|đã hồi sinh/i.test(msg)) mau = C.green;
+      console.log(`${mau}[${USERNAME}] ${msg}${C.reset}`);
+    };
 
     function recon(rsn) {
       if (done) return;
       done = true;
       if (balInt) clearInterval(balInt);
-      if (debugTocDoInt) clearInterval(debugTocDoInt);
       if (vaTocDoInt) clearInterval(vaTocDoInt);
       if (tpaCheckInt) clearInterval(tpaCheckInt);
       if (tafCheckInt) clearInterval(tafCheckInt);
+      if (vatCamTayInt) clearInterval(vatCamTayInt);
       activeBot = null;
       log(`Recon: ${rsn}`);
       try { bot.end(); } catch(_) {}
@@ -189,6 +151,7 @@ function startBot(delay = 0) {
 
     async function chuKyKiemTraTpa() {
       if (done) return;
+      log('Kiểm tra định kỳ: gửi /tpa.');
       bot.chat('/tpa');
 
       const coBiChan = await new Promise(resolve => {
@@ -212,7 +175,11 @@ function startBot(delay = 0) {
       });
 
       if (done) return;
-      if (!coBiChan) xuLyBiKickKhoiDungeon();
+      if (coBiChan) {
+        log('Vẫn trong dungeon (bình thường).');
+      } else {
+        xuLyBiKickKhoiDungeon();
+      }
     }
 
     // ============================================================
@@ -222,8 +189,12 @@ function startBot(delay = 0) {
     async function xuLyBatTaf() {
       if (done || dangXuLyBatTaf) return;
       dangXuLyBatTaf = true;
+      log('Phát hiện "TriggerBot đã tắt." trên chat -> chờ 5s rồi gửi /taf triggerbot.');
       await sleep(5000);
-      if (!done) bot.chat('/taf triggerbot');
+      if (!done) {
+        log('Gửi lại /taf triggerbot.');
+        bot.chat('/taf triggerbot');
+      }
       dangXuLyBatTaf = false;
     }
 
@@ -237,6 +208,7 @@ function startBot(delay = 0) {
     // ============================================================
     async function chuKyKiemTraTaf() {
       if (done) return;
+      log('Kiểm tra định kỳ: gửi /taf autofarm.');
       bot.chat('/taf autofarm');
 
       const coBat = await new Promise(resolve => {
@@ -260,7 +232,10 @@ function startBot(delay = 0) {
       });
 
       if (done) return;
-      if (!coBat) bot.chat('/taf triggerbot');
+      if (!coBat) {
+        log('Không thấy "TriggerBot đã tắt." sau /taf autofarm -> gửi lại /taf triggerbot ngay.');
+        bot.chat('/taf triggerbot');
+      }
     }
 
     async function khoiDong() {
@@ -281,15 +256,21 @@ function startBot(delay = 0) {
       // Bật sprint 1 lần, giữ nguyên suốt phiên (bật/tắt liên tục mỗi lần
       // đổi hàm di chuyển trước đây gây khựng, giảm tốc trung bình).
       bot.setControlState('sprint', true);
-      batDauDebugTocDo();
 
-      // 2 vòng kiểm tra định kỳ mới — chỉ khởi động 1 lần (khoiDong có thể
+      // 3 vòng kiểm tra định kỳ mới — chỉ khởi động 1 lần (khoiDong có thể
       // được gọi lại nhiều lần), tất cả đều nằm sau đoạn joined như yêu cầu.
       if (!tpaCheckInt) {
         tpaCheckInt = setInterval(() => { if (!done) chuKyKiemTraTpa(); }, 30000);
       }
       if (!tafCheckInt) {
         tafCheckInt = setInterval(() => { if (!done) chuKyKiemTraTaf(); }, 60000);
+      }
+      if (!vatCamTayInt) {
+        vatCamTayInt = setInterval(() => {
+          if (done) return;
+          const item = bot.heldItem;
+          log(`Tay chính đang cầm: ${item ? `${item.name} x${item.count}` : 'trống'}.`);
+        }, 60000);
       }
 
       await voDungeon();       // vô dungeon lần đầu (/warp dungeon1)
@@ -307,7 +288,6 @@ function startBot(delay = 0) {
 
         if (!quaiGanNhat) {
           log('Chưa thấy quái, chọn hướng đi tìm...');
-          debugDanhSachEntity(BAN_KINH_TIM_QUAI);
           const timThay = await diChuyenNgauNhienVaTimQuai(5000);
 
           if (timThay) {
@@ -372,6 +352,7 @@ function startBot(delay = 0) {
     // Vô dungeon / vô lại dungeon bằng lệnh riêng.
     async function voDungeon() {
       if (done) return;
+      log(`Vô dungeon (${CMD_VO_DUNGEON}).`);
       bot.chat(CMD_VO_DUNGEON);
       await sleep(rand(1500, 2000));
     }
@@ -602,22 +583,6 @@ function startBot(delay = 0) {
       return true;
     }
 
-    function debugDanhSachEntity(banKinh = 20) {
-      if (!bot.entity) return;
-      const ds = Object.values(bot.entities)
-        .filter(e => e && e !== bot.entity && e.position)
-        .map(e => ({
-          type: e.type,
-          kind: e.kind,
-          name: e.name,
-          ten: getTenTuyChinh(e),
-          kc: +bot.entity.position.distanceTo(e.position).toFixed(1)
-        }))
-        .filter(x => x.kc <= banKinh)
-        .sort((a, b) => a.kc - b.kc);
-      log(`[DEBUG] Entity trong bán kính ${banKinh}: ${JSON.stringify(ds)}`);
-    }
-
     function timQuaiGanNhat(banKinh = BAN_KINH_TIM_QUAI) {
       if (!bot.entity) return null;
       const ds = Object.values(bot.entities).filter(e => {
@@ -842,21 +807,6 @@ function startBot(delay = 0) {
     bot.on('bossBarUpdated', xuLyBossBarThayDoi);
     bot.on('bossBarDeleted', () => { dangBaoVeTraiTim = false; });
 
-    // Log đối chiếu: hiệu ứng mới xuất hiện/hết + thời điểm bot bị đánh
-    // trúng, để xác nhận Slowness/Weakness/Hunger có phải do quái đánh
-    // trúng gây ra hay không (so thời gian giữa 2 dòng log này).
-    // Bắt gói tin THÔ (không qua lớp trừu tượng của mineflayer) để xem
-    // server có đẩy tốc độ cho bot qua velocity hoặc ép vị trí thẳng
-    // (teleport) hay không — vì đã xác nhận KHÔNG qua attribute/effect
-    // chuẩn. Chỉ log khi entityId trùng với bot (bỏ qua entity khác).
-    bot._client.on('entity_velocity', packet => {
-      if (!bot.entity || packet.entityId !== bot.entity.id) return;
-      log(`[GÓI VELOCITY CHO BOT] x=${packet.velocity.x} y=${packet.velocity.y} z=${packet.velocity.z}`);
-    });
-    bot._client.on('position', packet => {
-      log(`[GÓI POSITION ÉP BỞI SERVER] x=${packet.x.toFixed(2)} y=${packet.y.toFixed(2)} z=${packet.z.toFixed(2)} dx=${!!(packet.flags & 1)} dy=${!!(packet.flags & 2)} dz=${!!(packet.flags & 4)}`);
-    });
-
     // Chết -> dừng di chuyển/goal đang dở (tránh đuổi theo mục tiêu cũ khi
     // vị trí đã reset). mineflayer tự động gửi lệnh hồi sinh, và emit
     // 'respawn' đúng lúc hồi sinh xong -> lúc đó vô lại dungeon và Khởi
@@ -876,18 +826,13 @@ function startBot(delay = 0) {
       if (!done) await khoiDong();
     });
 
-    bot.on('entityHurt', entity => {
-      if (done || !bot.entity || !entity || entity.id !== bot.entity.id) return;
-      log('[BOT BỊ ĐÁNH TRÚNG]');
-    });
+    // Cập nhật lại attribute tốc độ ngay khi hiệu ứng (Speed/Slowness...) thay đổi.
     bot.on('entityEffect', (entity, effect) => {
       if (done || !bot.entity || !entity || entity.id !== bot.entity.id) return;
-      log(`[HIỆU ỨNG MỚI] id=${effect.id} amplifier=${effect.amplifier} duration=${effect.duration}`);
       capNhatAttributeTocDoTheoHieuUng();
     });
     bot.on('entityEffectEnd', (entity, effect) => {
       if (done || !bot.entity || !entity || entity.id !== bot.entity.id) return;
-      log(`[HIỆU ỨNG HẾT] id=${effect.id}`);
       capNhatAttributeTocDoTheoHieuUng();
     });
 
