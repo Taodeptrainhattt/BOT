@@ -11,6 +11,8 @@ const PASSWORD = 'TaoLaTraiDep';
 
 // Lệnh vô / vô lại dungeon - chỉnh 1 chỗ này là áp dụng cho mọi nơi
 const CMD_VO_DUNGEON = '/warp dungeon1';
+// Cooldown thật của lệnh trên server - phải cách nhau ít nhất từng này ms
+const COOLDOWN_VO_DUNGEON_MS = 5250;
 
 // Bán kính (khối) quét quái / BOSS - tăng lên nếu phòng dungeon rộng
 const BAN_KINH_TIM_QUAI = 20;
@@ -30,7 +32,10 @@ const KHOANG_CACH_DUNG_CANH_DEN_ECH = 1; // đứng cách đèn ếch xa nhất 
 // ⚠️ PHẢI TỰ CẬP NHẬT LẠI SỐ NÀY mỗi khi skill lên cấp, bot không tự biết.
 const TOC_DO_TU_SKILL_MMO = 459 * 0.0003; // = 0.1377 -> đổi 459 thành cấp thật hiện tại của bạn
 
-const C = { green: '\x1b[32m', cyan: '\x1b[36m', yellow: '\x1b[33m', red: '\x1b[31m', white: '\x1b[37m', reset: '\x1b[0m' };
+// Slot hotbar dùng để cầm kiếm - bot LUÔN phải cầm slot này, không được đổi
+const SLOT_KIEM = 0;
+
+const C = { green: '\x1b[32m', cyan: '\x1b[36m', yellow: '\x1b[33m', red: '\x1b[31m', blue: '\x1b[34m', white: '\x1b[37m', reset: '\x1b[0m' };
 
 process.on('uncaughtException', err => { if (err.code !== 'EPIPE' && err.name !== 'PartialReadError') console.error('Lỗi:', err.message); });
 process.on('unhandledRejection', r => {});
@@ -68,8 +73,10 @@ function startBot(delay = 0) {
     let tpaCheckInt = null;
     let tafCheckInt = null;
     let vatCamTayInt = null;
+    let epSlotKiemInt = null;
     let dangXuLyBiKickDungeon = false;
     let dangXuLyBatTaf = false;
+    let lanCuoiVoDungeon = 0; // mốc thời gian (ms) lần gần nhất gửi lệnh vô dungeon
 
     const log = msg => {
       let mau = C.cyan;
@@ -78,9 +85,6 @@ function startBot(delay = 0) {
       else if (/=== khởi động ===|bắt đầu farm|đã có quái|phát hiện|đã hồi sinh/i.test(msg)) mau = C.green;
       console.log(`${mau}[${USERNAME}] ${msg}${C.reset}`);
     };
-    // Chat thật lấy từ server (dòng cuối trong bot.on('message')) luôn hiện
-    // màu trắng, không phân loại theo từ khóa như log('...') ở trên.
-    const logChat = msg => console.log(`${C.white}[${USERNAME}] ${msg}${C.reset}`);
 
     function recon(rsn) {
       if (done) return;
@@ -90,6 +94,7 @@ function startBot(delay = 0) {
       if (tpaCheckInt) clearInterval(tpaCheckInt);
       if (tafCheckInt) clearInterval(tafCheckInt);
       if (vatCamTayInt) clearInterval(vatCamTayInt);
+      if (epSlotKiemInt) clearInterval(epSlotKiemInt);
       activeBot = null;
       log(`Recon: ${rsn}`);
       try { bot.end(); } catch(_) {}
@@ -126,19 +131,6 @@ function startBot(delay = 0) {
 
     // ============================================================
     //  KHỞI ĐỘNG
-    //  FIX: coThongBaoThucTinh không còn được reset mỗi vòng lặp nữa
-    //  (server chỉ gửi dòng "Hãy hoàn thành thức tỉnh..." MỘT LẦN khi
-    //  vừa vô ải, không lặp lại mỗi 2.5s, nên yêu cầu nó true trong
-    //  từng vòng lặp khiến bot luôn báo "không có quái" dù có quái
-    //  thật ở gần). Giờ chỉ cần tìm THẤY quái là đủ điều kiện.
-    // ============================================================
-
-    // ============================================================
-    //  KIỂM TRA BỊ KICK KHỎI DUNGEON (qua /tpa mỗi 30s)
-    //  Gửi /tpa rồi chờ xem chat có "can't use /tpa" hay không:
-    //  - CÓ -> vẫn đang trong dungeon (bình thường, lệnh bị chặn) -> bỏ qua.
-    //  - KHÔNG có (hết thời gian chờ) -> đã bị out khỏi dungeon -> vô lại
-    //    dungeon và Khởi Động lại từ đầu.
     // ============================================================
     async function xuLyBiKickKhoiDungeon() {
       if (done || dangXuLyBiKickDungeon) return;
@@ -185,10 +177,6 @@ function startBot(delay = 0) {
       }
     }
 
-    // ============================================================
-    //  LISTENER CHUNG: bất kỳ lúc nào chat xuất hiện chữ "TriggerBot đã tắt." (không
-    //  riêng lúc gửi /taf autofarm) -> chờ 5s rồi gửi /taf triggerbot.
-    // ============================================================
     async function xuLyBatTaf() {
       if (done || dangXuLyBatTaf) return;
       dangXuLyBatTaf = true;
@@ -201,14 +189,6 @@ function startBot(delay = 0) {
       dangXuLyBatTaf = false;
     }
 
-    // ============================================================
-    //  KIỂM TRA /taf autofarm MỖI 60s
-    //  Gửi /taf autofarm, chờ xem chat có chữ "TriggerBot đã tắt." xuất hiện trong ~3s hay
-    //  không:
-    //  - Có "TriggerBot đã tắt." -> đã có listener chat chung (xuLyBatTaf) tự lo phần
-    //    chờ 5s rồi gửi /taf triggerbot, hàm này không cần làm gì thêm.
-    //  - Không có "TriggerBot đã tắt." -> gửi /taf triggerbot ngay (không chờ).
-    // ============================================================
     async function chuKyKiemTraTaf() {
       if (done) return;
       log('Kiểm tra định kỳ: gửi /taf autofarm.');
@@ -241,27 +221,36 @@ function startBot(delay = 0) {
       }
     }
 
+    // Ép tay chính về đúng slot kiếm nếu bị đổi đi nơi khác (do pathfinder,
+    // do server, hay bất kỳ nguyên nhân nào khác).
+    function epVeSlotKiem(lyDo) {
+      if (done) return;
+      if (bot.quickBarSlot !== SLOT_KIEM) {
+        log(`Tay chính bị đổi khỏi slot kiếm${lyDo ? ` (${lyDo})` : ''} -> ép lại slot ${SLOT_KIEM + 1}.`);
+        try { bot.setQuickBarSlot(SLOT_KIEM); } catch (e) {}
+      }
+    }
+
     async function khoiDong() {
       if (done) return;
       phase = 'khoiDong';
       log('=== KHỞI ĐỘNG ===');
 
-      try { bot.setQuickBarSlot(0); } catch (e) {} // luôn cầm vũ khí ở slot 1 hotbar
+      try { bot.setQuickBarSlot(SLOT_KIEM); } catch (e) {} // luôn cầm vũ khí ở slot 1 hotbar
 
       bot.physics.enabled = true;
       try {
         const movements = new Movements(bot);
-        movements.allowSprinting = true; // chạy (sprint) thay vì đi bộ thường -> đúng tốc độ tối đa
-        movements.allowParkour = true;   // cho phép nhảy qua vật cản/hố nhỏ khi di chuyển
+        movements.allowSprinting = true;   // chạy (sprint) thay vì đi bộ thường -> đúng tốc độ tối đa
+        movements.allowParkour = true;     // cho phép nhảy qua vật cản/hố nhỏ khi di chuyển
+        movements.canDig = false;          // KHÔNG cho đào khối -> tránh bot tự đổi tay cầm sang cuốc/xẻng/rìu...
+        movements.scafoldingBlocks = [];   // KHÔNG cho đặt khối để bắc cầu -> tránh bot tự cầm khối trong túi lên tay
         bot.pathfinder.setMovements(movements);
       } catch (e) {}
 
-      // Bật sprint 1 lần, giữ nguyên suốt phiên (bật/tắt liên tục mỗi lần
-      // đổi hàm di chuyển trước đây gây khựng, giảm tốc trung bình).
+      // Bật sprint 1 lần, giữ nguyên suốt phiên
       bot.setControlState('sprint', true);
 
-      // 3 vòng kiểm tra định kỳ mới — chỉ khởi động 1 lần (khoiDong có thể
-      // được gọi lại nhiều lần), tất cả đều nằm sau đoạn joined như yêu cầu.
       if (!tpaCheckInt) {
         tpaCheckInt = setInterval(() => { if (!done) chuKyKiemTraTpa(); }, 30000);
       }
@@ -271,9 +260,15 @@ function startBot(delay = 0) {
       if (!vatCamTayInt) {
         vatCamTayInt = setInterval(() => {
           if (done) return;
+          epVeSlotKiem('kiểm tra định kỳ');
           const item = bot.heldItem;
           log(`Tay chính đang cầm: ${item ? `${item.name} x${item.count}` : 'trống'}.`);
         }, 60000);
+      }
+      if (!epSlotKiemInt) {
+        // Ép liên tục, không chờ sự kiện heldItemChanged, phòng trường hợp
+        // server tự đổi slot mà không bắn sự kiện đó cho client.
+        epSlotKiemInt = setInterval(() => { epVeSlotKiem(); }, 2000);
       }
 
       await voDungeon();       // vô dungeon lần đầu (/warp dungeon1)
@@ -310,7 +305,6 @@ function startBot(delay = 0) {
       if (!done) batDauFarm();
     }
 
-    // Nhảy tại chỗ trong `thoiGian` ms
     async function nhaySoTaiCho(thoiGian) {
       bot.clearControlStates();
       const ketThuc = Date.now() + thoiGian;
@@ -323,8 +317,6 @@ function startBot(delay = 0) {
       bot.setControlState('jump', false);
     }
 
-    // Chọn bừa 1 hướng, đi tối đa `thoiGian` ms, vừa đi vừa quét quái
-    // quanh mình. Thấy quái là dừng đi lung tung và chạy tới đánh luôn.
     async function diChuyenNgauNhienVaTimQuai(thoiGian) {
       if (!bot.entity) return false;
 
@@ -352,11 +344,20 @@ function startBot(delay = 0) {
       return false;
     }
 
-    // Vô dungeon / vô lại dungeon bằng lệnh riêng.
     async function voDungeon() {
       if (done) return;
+
+      const daTroiQua = Date.now() - lanCuoiVoDungeon;
+      if (daTroiQua < COOLDOWN_VO_DUNGEON_MS) {
+        const conLai = COOLDOWN_VO_DUNGEON_MS - daTroiQua;
+        log(`Lệnh vô dungeon còn cooldown -> đợi ${(conLai / 1000).toFixed(1)}s.`);
+        await sleep(conLai);
+        if (done) return;
+      }
+
       log(`Vô dungeon (${CMD_VO_DUNGEON}).`);
       bot.chat(CMD_VO_DUNGEON);
+      lanCuoiVoDungeon = Date.now();
       await sleep(rand(1500, 2000));
     }
 
@@ -393,8 +394,6 @@ function startBot(delay = 0) {
       }
     }
 
-    // Cố đọc HP hiện tại/tối đa nếu tên quái hiển thị dạng "... 12/50 ..."
-    // hoặc "...[12/50]..." (phổ biến ở server RPG custom mob).
     function layMauQuaTen(e) {
       const ten = getTenTuyChinh(e);
       if (!ten) return null;
@@ -403,20 +402,10 @@ function startBot(delay = 0) {
       return { hienTai: parseFloat(m[1]), toiDa: parseFloat(m[2]) };
     }
 
-    // Tín hiệu chết ĐÁNG TIN CẬY NHẤT: server gửi gói entity_status mã 3
-    // đúng lúc 1 entity thực sự chết (dùng để phát animation chết cho
-    // client) -> mineflayer emit event 'entityDead'. Đánh dấu thẳng lên
-    // entity, quaiConSong() sẽ ưu tiên đọc cờ này trước mọi cách khác.
     bot.on('entityDead', entity => {
       if (entity) entity.__daChet = true;
     });
 
-    // Check "còn sống" thật sự, theo thứ tự ưu tiên:
-    // 1) Cờ __daChet (từ gói entity_status thật của server) -> chắc chắn nhất.
-    // 2) Entity đã biến mất khỏi world -> chắc chắn chết.
-    // 3) Máu đọc được từ tên (kiểu server RPG hiện HP trong nametag) nếu có.
-    // 4) Field health chuẩn của LivingEntity (mineflayer tự parse từ metadata) nếu có.
-    // 5) Không có tín hiệu nào -> coi như còn sống (chỉ dừng khi entity biến mất hoặc hết giờ an toàn).
     function quaiConSong(e) {
       if (!e) return false;
       if (e.__daChet) return false;
@@ -444,16 +433,19 @@ function startBot(delay = 0) {
           break;
         }
 
+        // luôn đảm bảo tay chính là kiếm trước mỗi nhịp đánh
+        epVeSlotKiem('trước đòn đánh');
+
         const khoangCach = bot.entity.position.distanceTo(quai.position);
         if (khoangCach <= 3.5) {
           try { bot.lookAt(quai.position.offset(0, 1.2, 0), true); } catch (e) {}
           bot.attack(quai);
-          await sleep(450); // ~tốc độ đánh 1 vũ khí thường, chỉnh lại nếu vũ khí đánh nhanh/chậm hơn
+          await sleep(450);
         } else {
           await sleep(400);
         }
 
-        if (Date.now() - batDau > 20000) break; // an toàn, tránh kẹt vô hạn với 1 con quái
+        if (Date.now() - batDau > 20000) break;
       }
 
       try { bot.pathfinder.setGoal(null); } catch (e) {}
@@ -461,14 +453,6 @@ function startBot(delay = 0) {
 
     // ============================================================
     //  BOSS BAR: "Bảo vệ trái tim của hầm ngục"
-    //  - Khi boss bar hiện dòng này: tạm dừng farm, tìm 1 trong 3
-    //    loại đèn ếch (froglight) gần nhất, di chuyển tới đứng cách
-    //    nó xa nhất 1 block và đứng yên tại đó.
-    //  - Khi boss bar đổi nội dung/biến mất: quay lại farm bình thường.
-    //  GIẢ ĐỊNH: server gửi dòng này qua boss bar thật (packet
-    //  boss_bar) nên dùng sự kiện bossBarCreated/Updated của
-    //  mineflayer. Nếu bot không bắt được, log bossBar thô ra để
-    //  kiểm tra cấu trúc thật rồi chỉnh lại laBossBarBaoVeTraiTim().
     // ============================================================
 
     function laBossBarBaoVeTraiTim(bossBar) {
@@ -483,8 +467,6 @@ function startBot(delay = 0) {
       } catch (e) { return false; }
     }
 
-    // Tìm 1 trong 3 loại đèn ếch gần nhất và ra lệnh pathfinder di
-    // chuyển tới đứng cách nó xa nhất KHOANG_CACH_DUNG_CANH_DEN_ECH block.
     async function diToiDenEchGanNhat() {
       if (!bot.entity) return null;
 
@@ -524,8 +506,6 @@ function startBot(delay = 0) {
       return khoi.position;
     }
 
-    // Luồng xử lý chính: tạm dừng farm, đứng cạnh đèn ếch cho tới khi
-    // boss bar không còn hiện dòng "Bảo vệ trái tim..." nữa.
     async function xuLyBaoVeTraiTim() {
       if (dangXuLyBaoVeTraiTim) return;
       dangXuLyBaoVeTraiTim = true;
@@ -541,7 +521,6 @@ function startBot(delay = 0) {
         if (viTriDenEchHienTai) {
           const kc = bot.entity.position.distanceTo(viTriDenEchHienTai);
           if (kc > KHOANG_CACH_DUNG_CANH_DEN_ECH + 2) {
-            // lỡ bị đẩy ra xa (bị đánh văng, quái đẩy...) -> đi lại
             viTriDenEchHienTai = await diToiDenEchGanNhat();
           }
         } else {
@@ -564,7 +543,7 @@ function startBot(delay = 0) {
         dangBaoVeTraiTim = true;
         xuLyBaoVeTraiTim();
       } else if (!canBaoVe && dangBaoVeTraiTim) {
-        dangBaoVeTraiTim = false; // vòng while trong xuLyBaoVeTraiTim sẽ tự thoát ở lượt kiểm tra kế tiếp
+        dangBaoVeTraiTim = false;
       }
     }
 
@@ -575,7 +554,7 @@ function startBot(delay = 0) {
       'leash_knot', 'end_crystal', 'evoker_fangs', 'block_display',
       'item_display', 'text_display', 'marker', 'boat', 'chest_boat',
       'minecart', 'chest_minecart', 'lightning_bolt',
-      'turtle' // không đánh rùa
+      'turtle'
     ]);
 
     function coTheLaQuai(e) {
@@ -614,13 +593,6 @@ function startBot(delay = 0) {
       return ten.includes('BOSS');
     }
 
-    // FIX: đọc tên tuỳ chỉnh (nametag) đúng vị trí metadata chuẩn
-    // (index 2 = custom name, dạng optional chat component, theo spec
-    // Entity base của Minecraft 1.21.x), có xử lý cả dạng wrap
-    // {present, value} lẫn dạng raw, và cả trường hợp value là chuỗi
-    // JSON của chat component thay vì object sẵn. Nếu index 2 trống,
-    // fallback quét toàn bộ metadata như bản cũ để không bỏ sót
-    // trường hợp server đặt tên ở vị trí khác.
     function chatComponentToText(comp) {
       if (!comp) return '';
       if (typeof comp === 'string') return comp;
@@ -634,7 +606,6 @@ function startBot(delay = 0) {
         if (e.username) return e.username;
 
         if (Array.isArray(e.metadata)) {
-          // 1) Thử đúng vị trí chuẩn trước (index 2 = custom name)
           const raw2 = e.metadata[2];
           const val2 = (raw2 && typeof raw2 === 'object' && 'present' in raw2 && 'value' in raw2)
             ? (raw2.present ? raw2.value : null)
@@ -655,8 +626,6 @@ function startBot(delay = 0) {
             }
           }
 
-          // 2) Fallback: quét toàn bộ metadata như bản cũ, phòng khi
-          // server đặt tên ở vị trí khác chuẩn
           for (const item of e.metadata) {
             if (!item) continue;
             if (typeof item === 'string' && item.trim()) return item;
@@ -670,7 +639,6 @@ function startBot(delay = 0) {
       return '';
     }
 
-    // "Ải này không có thưởng rơi" -> vô lại ải, KHÔNG gọi lại Khởi Động
     async function xuLyKhongCoThuong() {
       if (done || dangXuLySuKienDungeon) return;
       dangXuLySuKienDungeon = true;
@@ -684,7 +652,6 @@ function startBot(delay = 0) {
       setTimeout(() => { dangXuLySuKienDungeon = false; }, 3000);
     }
 
-    // "Phần thưởng ải" -> chờ 6s, /is, đi thẳng 3s, rồi mới vô lại dungeon và Khởi Động lại
     async function xuLyCoThuong() {
       if (done || dangXuLySuKienDungeon) return;
       dangXuLySuKienDungeon = true;
@@ -728,28 +695,15 @@ function startBot(delay = 0) {
     });
 
     // ============================================================
-    //  VÁ LỖI TỐC ĐỘ: thư viện vật lý mineflayer dùng (prismarine-
-    //  physics) tính ra mức Speed/Slowness (this.speed/this.slowness)
-    //  nhưng KHÔNG hề dùng chúng để tính vận tốc — nó chỉ đọc attribute
-    //  "minecraft:movement_speed" mà server gửi (ở server này gửi giá
-    //  trị 0) cộng bonus sprint. Vì vậy Speed III thật sự KHÔNG được
-    //  áp dụng vào việc bot di chuyển dù bot đang có hiệu ứng đó.
-    //  Fix: tự tính lại attribute này y hệt công thức vanilla thật
-    //  (client Minecraft gốc tự làm việc này mỗi khi effect thay đổi):
-    //  Speed: nhân tổng dồn +20% mỗi cấp (amplifier+1).
-    //  Slowness: nhân tổng dồn -15% mỗi cấp, không cho xuống dưới 0.
+    //  VÁ LỖI TỐC ĐỘ
     // ============================================================
     const KEY_ATTR_TOC_DO = 'minecraft:movement_speed';
     const UUID_MOD_SPEED = '91aeaa56-376b-4498-935b-2f7f68070635';
     const UUID_MOD_SLOWNESS = '7107de5e-7ce8-4030-940e-514c1f160890';
-    const UUID_MOD_VAT_PHAM = 'a1b2c3d4-e5f6-4a1b-8c9d-1234567890ab'; // UUID tự đặt, chỉ dùng nội bộ để lọc/thay thế
-    const UUID_MOD_SKILL_MMO = 'b2c3d4e5-f6a7-4b2c-9d0e-234567890abc'; // UUID tự đặt cho phần bonus skill MMO
-    const BASE_TOC_DO_VANILLA = 0.1; // base chuẩn của player khi đi bộ
+    const UUID_MOD_VAT_PHAM = 'a1b2c3d4-e5f6-4a1b-8c9d-1234567890ab';
+    const UUID_MOD_SKILL_MMO = 'b2c3d4e5-f6a7-4b2c-9d0e-234567890abc';
+    const BASE_TOC_DO_VANILLA = 0.1;
 
-    // Đọc chỉ số "Movement Speed: +N" thật trong lore của vật phẩm đang
-    // cầm (dữ liệu có thật của chính item, không phải suy đoán) và quy
-    // đổi thành phần trăm cộng dồn (N=3 -> 0.03), khớp đúng với giá trị
-    // MMOITEMS_MOVEMENT_SPEED trong NBT thật của item.
     function layMovementSpeedTuVatPhamDangCam() {
       try {
         const item = bot.heldItem;
@@ -767,17 +721,13 @@ function startBot(delay = 0) {
     function capNhatAttributeTocDoTheoHieuUng() {
       if (!bot.entity) return;
       const effects = bot.entity.effects || {};
-      const capSpeed = effects[0] ? effects[0].amplifier + 1 : 0;    // id 0 = Speed
-      const capSlowness = effects[1] ? effects[1].amplifier + 1 : 0; // id 1 = Slowness
-      const boSuaTuVatPham = layMovementSpeedTuVatPhamDangCam();      // vd 0.03 = +3%
+      const capSpeed = effects[0] ? effects[0].amplifier + 1 : 0;
+      const capSlowness = effects[1] ? effects[1].amplifier + 1 : 0;
+      const boSuaTuVatPham = layMovementSpeedTuVatPhamDangCam();
 
       const attrHienTai = bot.entity.attributes && bot.entity.attributes[KEY_ATTR_TOC_DO];
-      // Nếu server gửi base = 0 (bất thường, không dùng được để đi lại) thì
-      // dùng base chuẩn vanilla; giữ nguyên base nếu server gửi giá trị hợp lý.
       const baseGoc = attrHienTai && attrHienTai.value > 0 ? attrHienTai.value : BASE_TOC_DO_VANILLA;
 
-      // Giữ lại các modifier khác (nếu có, vd modifier gốc từ server) trừ 4
-      // modifier do chính hàm này thêm vào trước đó -> tránh cộng dồn sai.
       const modifiersKhac = ((attrHienTai && attrHienTai.modifiers) || []).filter(
         m => m.uuid !== UUID_MOD_SPEED && m.uuid !== UUID_MOD_SLOWNESS &&
              m.uuid !== UUID_MOD_VAT_PHAM && m.uuid !== UUID_MOD_SKILL_MMO
@@ -801,19 +751,20 @@ function startBot(delay = 0) {
       bot.entity.attributes[KEY_ATTR_TOC_DO] = { value: baseGoc, modifiers: modifiersMoi };
     }
 
-    // Chạy định kỳ để chắc ăn (phòng khi bỏ lỡ sự kiện effect nào đó),
-    // ngoài việc gọi ngay mỗi khi effect thay đổi ở các listener bên dưới.
     vaTocDoInt = setInterval(() => { if (!done) capNhatAttributeTocDoTheoHieuUng(); }, 1000);
-    bot.on('heldItemChanged', () => { if (!done) capNhatAttributeTocDoTheoHieuUng(); });
+
+    // Mỗi khi tay chính đổi (dù do đâu): ép lại về slot kiếm rồi mới tính
+    // lại attribute tốc độ theo đúng vật phẩm đang cầm thật sự (slot kiếm).
+    bot.on('heldItemChanged', () => {
+      if (done) return;
+      epVeSlotKiem('heldItemChanged');
+      capNhatAttributeTocDoTheoHieuUng();
+    });
 
     bot.on('bossBarCreated', xuLyBossBarThayDoi);
     bot.on('bossBarUpdated', xuLyBossBarThayDoi);
     bot.on('bossBarDeleted', () => { dangBaoVeTraiTim = false; });
 
-    // Chết -> dừng di chuyển/goal đang dở (tránh đuổi theo mục tiêu cũ khi
-    // vị trí đã reset). mineflayer tự động gửi lệnh hồi sinh, và emit
-    // 'respawn' đúng lúc hồi sinh xong -> lúc đó vô lại dungeon và Khởi
-    // Động lại từ đầu (vì hồi sinh thường bị đẩy ra khỏi dungeon).
     bot.on('death', () => {
       if (done) return;
       log('Bot đã chết -> chờ hồi sinh.');
@@ -824,12 +775,11 @@ function startBot(delay = 0) {
     bot.on('respawn', async () => {
       if (done) return;
       log('Đã hồi sinh -> vô lại dungeon và Khởi Động lại.');
-      try { bot.setQuickBarSlot(0); } catch (e) {}
+      try { bot.setQuickBarSlot(SLOT_KIEM); } catch (e) {}
       await sleep(1000);
       if (!done) await khoiDong();
     });
 
-    // Cập nhật lại attribute tốc độ ngay khi hiệu ứng (Speed/Slowness...) thay đổi.
     bot.on('entityEffect', (entity, effect) => {
       if (done || !bot.entity || !entity || entity.id !== bot.entity.id) return;
       capNhatAttributeTocDoTheoHieuUng();
@@ -870,7 +820,7 @@ function startBot(delay = 0) {
       }
 
       if (ignoreChat) return;
-      logChat(clean);
+      console.log(`${C.white}[${USERNAME}] ${clean}${C.reset}`); // chat server -> màu trắng
     });
 
     bot.on('resourcePack', (u, h) => {
