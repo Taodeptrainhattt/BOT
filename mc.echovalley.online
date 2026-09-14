@@ -1,0 +1,54 @@
+const mineflayer = require('mineflayer')
+const config = {
+  host: 'mc.echovalley.online',  
+  port: 25565,             
+  username: 'BotName',     // Tên bot 
+  password: 'mat_khau_cua_ban', // Mật khẩu dùng cho lệnh /login
+  version: '1.21.11',      
+  auth: 'offline'         
+}
+
+function createBot() {
+  const bot = mineflayer.createBot({
+    host: config.host,
+    port: config.port,
+    username: config.username,
+    password: config.auth === 'microsoft' ? undefined : undefined,
+    version: config.version,
+    auth: config.auth
+  })
+
+  bot.on('spawn', () => {
+    console.log('[Bot] Đã vào server, chuẩn bị login...')
+
+    // Gửi lệnh /login ngay khi spawn
+    bot.chat(`/login ${config.password}`)
+    console.log('[Bot] Đã gửi lệnh /login')
+
+    setTimeout(() => {
+      bot.chat(`/warp afk`)
+      console.log(`[Bot] Đã gửi lệnh /warp afk`)
+    }, 2000)
+  })
+
+  // Log tin nhắn chat từ server để tiện debug
+  bot.on('message', (jsonMsg) => {
+    console.log('[Chat]', jsonMsg.toString())
+  })
+
+  bot.on('kicked', (reason) => {
+    console.log('[Bot] Bị kick khỏi server:', reason)
+  })
+
+  bot.on('error', (err) => {
+    console.log('[Bot] Lỗi:', err)
+  })
+
+  // Tự động kết nối lại sau 5 giây nếu bot bị ngắt kết nối
+  bot.on('end', () => {
+    console.log('[Bot] Mất kết nối, thử kết nối lại sau 5 giây...')
+    setTimeout(createBot, 5000)
+  })
+}
+
+createBot()
