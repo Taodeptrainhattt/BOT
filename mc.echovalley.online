@@ -4,11 +4,11 @@ const mineflayer = require('mineflayer')
 const serverConfig = {
   host: 'mc.echovalley.online',   
   port: 25565,         
-  version: '1.21.11',  
+  version: '1.21.11',  //VERSION
   auth: 'offline'      
 }
 
-const PASSWORD = 'mat_khau_cua_ban'
+const PASSWORD = 'mat_khau'
 
 const accounts = [
   { username: 'Bot1' },
