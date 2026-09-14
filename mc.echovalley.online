@@ -2,7 +2,7 @@ const mineflayer = require('mineflayer')
 
 // ====== CẤU HÌNH CHUNG ======
 const serverConfig = {
-  host: 'localhost',   
+  host: 'mc.echovalley.online',   
   port: 25565,         
   version: '1.21.11',  
   auth: 'offline'      
