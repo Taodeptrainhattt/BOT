@@ -4,10 +4,10 @@ const mineflayer = require('mineflayer')
 const CONFIG = {
   host: 'mc.echovalley.online',
   port: 25565,
-  username: 'Bot01',      // tên bot (nếu online-mode: true thì cần tài khoản thật/microsoft auth)
-  version: '1.21.4',      // phải để trong dấu nháy vì là string, không phải số
-  auth: 'offline',        // 'offline' hoặc 'microsoft' tùy server
-  reconnectDelay: 5000,   // thời gian chờ trước khi reconnect (ms)
+  username: 'Bot01',      
+  version: '1.21.4',      
+  auth: 'offline',        
+  reconnectDelay: 5000,   
 }
 
 function createBot() {
