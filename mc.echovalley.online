@@ -22,7 +22,6 @@ function createBot() {
     // Đảm bảo không di chuyển: tắt hết control state
     bot.clearControlStates()
 
-    // Nhìn thẳng để tránh trông "bất động bất thường" (tuỳ chọn)
     // bot.look(bot.entity.yaw, 0, true)
   })
 
