@@ -1,136 +1,49 @@
 const mineflayer = require('mineflayer')
-const readline = require('readline')
-
-// Lưu các bot đang kết nối theo username, dùng để gửi chat từ terminal
-const bots = {}
-
-// ====== CẤU HÌNH CHUNG ======
-const serverConfig = {
-  host: 'mc.echovalley.online',   
-  port: 25565,         
-  version: '1.21.11',  //VERSION
-  auth: 'offline'      
+const CONFIG = {
+  host: 'localhost',      
+  port: 25565,            
+  username: 'Bot01',     // TÊN 
+  version: 1.21.4,         
+  auth: 'offline',        
+  reconnectDelay: 5000,   
 }
-
-const PASSWORD = 'Deptraicogisai1!'
-const REG = 'Deptraicogisai1!'
-
-const accounts = [
-  { username: 'AnhDepTrai2000' },
-  { username: 'AnhNhoEm3000' },
-  { username: 'AnhZaiDep1999' },
-]
-
-const CONNECT_DELAY_MS = 3000
-
-function createBot(account) {
+function createBot() {
   const bot = mineflayer.createBot({
-    host: serverConfig.host,
-    port: serverConfig.port,
-    username: account.username,
-    version: serverConfig.version,
-    auth: serverConfig.auth
+    host: CONFIG.host,
+    port: CONFIG.port,
+    username: CONFIG.username,
+    version: CONFIG.version,
+    auth: CONFIG.auth,
   })
 
-  const tag = `[${account.username}]`
-  let hasRun = false // đảm bảo chuỗi lệnh chỉ chạy 1 lần mỗi lần kết nối
+  bot.once('spawn', () => {
+    console.log('[Bot] Đã spawn vào server.')
 
-  bots[account.username] = bot // đăng ký bot để gửi chat từ terminal
+    // Đảm bảo không di chuyển: tắt hết control state
+    bot.clearControlStates()
 
-  bot.on('spawn', () => {
-    if (hasRun) return // spawn có thể bắn nhiều lần (respawn, đổi dimension...), chặn spam
-    hasRun = true
-
-    console.log(`${tag} Đã vào server, chuẩn bị đăng nhập...`)
-
-    // Lệnh 1: /reg (gửi ngay, phòng trường hợp tài khoản chưa đăng ký)
-    setTimeout(() => {
-      bot.chat(`/reg ${REG} ${REG}`)
-      console.log(`${tag} Đã gửi lệnh /reg`)
-    }, 0)
-
-    // Lệnh 2: /login (sau 3 giây)
-    setTimeout(() => {
-      bot.chat(`/login ${PASSWORD}`)
-      console.log(`${tag} Đã gửi lệnh /login`)
-    }, 3000)
-
-    // Lệnh 3: /warp afk (sau 6 giây, tức 3 giây sau /login)
-    setTimeout(() => {
-      bot.chat('/warp afk')
-      console.log(`${tag} Đã gửi lệnh /warp afk`)
-    }, 6000)
+    // Nhìn thẳng để tránh trông "bất động bất thường" (tuỳ chọn)
+    // bot.look(bot.entity.yaw, 0, true)
   })
 
-  bot.on('message', (jsonMsg) => {
-    console.log(`${tag} [Chat]`, jsonMsg.toString())
-  })
+  setInterval(() => {
+    if (!bot.entity) return
+    bot.look(bot.entity.yaw + 0.01, bot.entity.pitch, true)
+  }, 30000)
+  */
 
   bot.on('kicked', (reason) => {
-    console.log(`${tag} Bị kick khỏi server:`, reason)
+    console.log('[Bot] Bị kick:', reason)
   })
 
   bot.on('error', (err) => {
-    console.log(`${tag} Lỗi:`, err)
+    console.log('[Bot] Lỗi:', err.message)
   })
 
   bot.on('end', () => {
-    console.log(`${tag} Mất kết nối, thử kết nối lại sau 5 giây...`)
-    delete bots[account.username]
-    setTimeout(() => createBot(account), 5000)
+    console.log(`[Bot] Mất kết nối, thử lại sau ${CONFIG.reconnectDelay / 1000}s...`)
+    setTimeout(createBot, CONFIG.reconnectDelay)
   })
-
-  return bot
 }
-accounts.forEach((account, index) => {
-  setTimeout(() => createBot(account), index * CONNECT_DELAY_MS)
-})
 
-// ====== CHAT TỪ TERMINAL ======
-// Gõ bình thường -> gửi từ TẤT CẢ bot đang online
-// Gõ "@TênBot nội dung" -> chỉ gửi từ bot đó
-// Gõ "/list" -> xem danh sách bot đang online
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-
-console.log('\n[Terminal] Gõ tin nhắn và Enter để chat (gửi từ tất cả bot).')
-console.log('[Terminal] Gõ "@TênBot nội dung" để chỉ gửi từ 1 bot cụ thể.')
-console.log('[Terminal] Gõ "/list" để xem danh sách bot đang online.\n')
-
-rl.on('line', (line) => {
-  const input = line.trim()
-  if (!input) return
-
-  if (input === '/list') {
-    const online = Object.keys(bots)
-    console.log(online.length ? `[Terminal] Bot đang online: ${online.join(', ')}` : '[Terminal] Chưa có bot nào online.')
-    return
-  }
-
-  if (input.startsWith('@')) {
-    const spaceIndex = input.indexOf(' ')
-    if (spaceIndex === -1) {
-      console.log('[Terminal] Thiếu nội dung tin nhắn. Cú pháp: @TênBot nội dung')
-      return
-    }
-    const targetName = input.slice(1, spaceIndex)
-    const message = input.slice(spaceIndex + 1)
-    const targetBot = bots[targetName]
-
-    if (!targetBot) {
-      console.log(`[Terminal] Không tìm thấy bot "${targetName}" đang online.`)
-      return
-    }
-    targetBot.chat(message)
-    console.log(`[Terminal] [${targetName}] đã gửi: ${message}`)
-    return
-  }
-
-  // Không có @ -> gửi từ tất cả bot đang online
-  const names = Object.keys(bots)
-  if (names.length === 0) {
-    console.log('[Terminal] Chưa có bot nào online để gửi.')
-    return
-  }
-  names.forEach((name) => bots[name].chat(input))
-  console.log(`[Terminal] Đã gửi "${input}" từ ${names.length} bot: ${names.join(', ')}`)
-})
+createBot()
