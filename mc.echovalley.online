@@ -1,12 +1,15 @@
 const mineflayer = require('mineflayer')
+
+// ===== CẤU HÌNH =====
 const CONFIG = {
-  host: 'mc.echovalley.online',      
-  port: 25565,            
-  username: 'Bot01',     // TÊN 
-  version: 1.21.4,         
-  auth: 'offline',        
-  reconnectDelay: 5000,   
+  host: 'mc.echovalley.online',
+  port: 25565,
+  username: 'Bot01',      // tên bot (nếu online-mode: true thì cần tài khoản thật/microsoft auth)
+  version: '1.21.4',      // phải để trong dấu nháy vì là string, không phải số
+  auth: 'offline',        // 'offline' hoặc 'microsoft' tùy server
+  reconnectDelay: 5000,   // thời gian chờ trước khi reconnect (ms)
 }
+
 function createBot() {
   const bot = mineflayer.createBot({
     host: CONFIG.host,
@@ -17,14 +20,18 @@ function createBot() {
   })
 
   bot.once('spawn', () => {
-    console.log('[Bot] Đã spawn vào server.')
+    console.log('[Bot] Đã spawn vào server, đứng yên tại chỗ.')
 
     // Đảm bảo không di chuyển: tắt hết control state
     bot.clearControlStates()
 
+    // Nhìn thẳng để tránh trông "bất động bất thường" (tuỳ chọn)
     // bot.look(bot.entity.yaw, 0, true)
   })
 
+  // Một số server anti-cheat sẽ kick bot đứng yên tuyệt đối quá lâu (coi là AFK).
+  // Nếu cần, có thể bật đoạn dưới để bot "nhúc nhích nhẹ" định kỳ (không di chuyển vị trí xa):
+  /*
   setInterval(() => {
     if (!bot.entity) return
     bot.look(bot.entity.yaw + 0.01, bot.entity.pitch, true)
